@@ -1,0 +1,30 @@
+services:
+  api:
+    build:
+      context: ./apps/api
+    environment:
+      BEATLY_UPLOAD_DIR: /tmp/beatly/uploads
+      BEATLY_SEPARATED_DIR: /tmp/beatly/separated
+      BEATLY_USE_STUBS: "false"
+      WHISPER_MODEL: small
+    ports:
+      - "8000:8000"
+    volumes:
+      - beatly-model-cache:/root/.cache
+      - beatly-data:/tmp/beatly
+
+  web:
+    build:
+      context: .
+      dockerfile: ./apps/web/Dockerfile
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+      API_INTERNAL_URL: http://api:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+
+volumes:
+  beatly-model-cache:
+  beatly-data:

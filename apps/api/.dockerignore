@@ -1,0 +1,8 @@
+__pycache__
+**/__pycache__
+.pytest_cache
+.mypy_cache
+uploads
+separated
+.env
+.env.*

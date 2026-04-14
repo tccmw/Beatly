@@ -1,0 +1,11 @@
+.git
+node_modules
+apps/web/.next
+apps/web/node_modules
+apps/api/__pycache__
+apps/api/**/__pycache__
+uploads
+separated
+tmp
+.env
+.env.*

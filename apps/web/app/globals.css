@@ -1,0 +1,160 @@
+:root {
+  --ink: #111317;
+  --muted: #5d6675;
+  --line: #d8dde7;
+  --paper: #f7f8fb;
+  --panel: #ffffff;
+  --accent: #0e7c66;
+  --accent-strong: #075c4b;
+  --warn: #b54708;
+  --red: #b42318;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  color: var(--ink);
+  background: var(--paper);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+.page {
+  min-height: 100vh;
+  padding: 32px;
+}
+
+.shell {
+  max-width: 1180px;
+  margin: 0 auto;
+}
+
+.topbar {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 24px;
+}
+
+.title {
+  margin: 0 0 8px;
+  font-size: 34px;
+  line-height: 1.08;
+}
+
+.subtitle {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.5;
+  max-width: 720px;
+}
+
+.upload-panel {
+  display: grid;
+  gap: 16px;
+  padding: 20px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.file-input {
+  min-width: 260px;
+  max-width: 100%;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.button {
+  min-height: 42px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 8px;
+  color: #fff;
+  background: var(--accent);
+  cursor: pointer;
+}
+
+.button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.error {
+  color: var(--red);
+}
+
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 22px 0 12px;
+  color: var(--muted);
+}
+
+.pill {
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.score-wrap {
+  margin-top: 18px;
+  overflow-x: auto;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.score-canvas {
+  min-width: 920px;
+  padding: 16px 12px 8px;
+}
+
+.empty {
+  margin-top: 18px;
+  padding: 28px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  background: #fff;
+}
+
+@media (max-width: 720px) {
+  .page {
+    padding: 20px 14px;
+  }
+
+  .topbar {
+    display: block;
+  }
+
+  .title {
+    font-size: 28px;
+  }
+
+  .file-input,
+  .button {
+    width: 100%;
+  }
+}
