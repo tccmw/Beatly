@@ -50,6 +50,17 @@ Then open:
       "lyric": "Hello",
       "confidence": 0.82
     }
+  ],
+  "engraved_measures": [
+    {
+      "measure": 1,
+      "voice1": [
+        { "slot": 0, "duration": "8", "duration_ticks": 240, "rest": false, "voice": 1, "events": [] }
+      ],
+      "voice2": [
+        { "slot": 0, "duration": "q", "duration_ticks": 480, "rest": true, "voice": 2, "events": [] }
+      ]
+    }
   ]
 }
 ```

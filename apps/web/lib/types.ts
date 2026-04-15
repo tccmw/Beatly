@@ -35,10 +35,37 @@ export type MidiTickEvent = {
   confidence: number;
 };
 
+export type EngravedEvent = {
+  drum: DrumNote;
+  midi_note: number;
+  staff_key: string;
+  notehead: "normal" | "x";
+  articulation: "accent" | "open" | "none";
+  lyric?: string | null;
+  confidence: number;
+};
+
+export type EngravedTick = {
+  slot: number;
+  duration: "q" | "8" | "16";
+  duration_ticks: number;
+  rest: boolean;
+  voice: 1 | 2;
+  events: EngravedEvent[];
+  lyric?: string | null;
+};
+
+export type EngravedMeasure = {
+  measure: number;
+  voice1: EngravedTick[];
+  voice2: EngravedTick[];
+};
+
 export type AnalysisResult = {
   bpm: number;
   events: ScoreEvent[];
   words: LyricWord[];
   ticks_per_quarter: number;
   midi_ticks: MidiTickEvent[];
+  engraved_measures: EngravedMeasure[];
 };

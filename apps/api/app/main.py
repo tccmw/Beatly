@@ -12,7 +12,7 @@ from app.models import AnalysisResult
 from app.services.drum_analysis import detect_drum_events, estimate_bpm
 from app.services.drum_separation import DrumSeparationError, separate_drums_with_demucs
 from app.services.lyrics import transcribe_words_with_whisper
-from app.services.notation import TICKS_PER_QUARTER, build_midi_tick_list
+from app.services.notation import TICKS_PER_QUARTER, build_engraved_measures, build_midi_tick_list
 from app.services.score_merge import merge_drums_and_lyrics
 
 app = FastAPI(title="Beatly API", version="0.1.0")
@@ -56,12 +56,14 @@ async def analyze(file: UploadFile = File(...)) -> AnalysisResult:
         )
         events = merge_drums_and_lyrics(drum_events, words)
         midi_ticks = build_midi_tick_list(events, bpm)
+        engraved_measures = build_engraved_measures(midi_ticks)
         return AnalysisResult(
             bpm=bpm,
             events=events,
             words=words,
             ticks_per_quarter=TICKS_PER_QUARTER,
             midi_ticks=midi_ticks,
+            engraved_measures=engraved_measures,
         )
     except DrumSeparationError as exc:
         raise HTTPException(status_code=502, detail=f"Drum separation failed: {exc}") from exc

@@ -59,7 +59,109 @@ def detect_drum_events(audio_path: Path) -> list[DrumEvent]:
                 )
             )
 
+    events.extend(_detect_low_frequency_kicks(y, sr))
+    events.extend(_detect_high_frequency_cymbals(y, sr))
     return _dedupe_events(events)
+
+
+def _detect_low_frequency_kicks(y: np.ndarray, sr: int) -> list[DrumEvent]:
+    """Detect low-end kick transients in the 35Hz-160Hz band."""
+    hop_length = 256
+    n_fft = 2048
+    spectrum = np.abs(librosa.stft(y, n_fft=n_fft, hop_length=hop_length))
+    freqs = librosa.fft_frequencies(sr=sr, n_fft=n_fft)
+    low_mask = (freqs >= 35) & (freqs <= 160)
+    if not np.any(low_mask):
+        return []
+
+    low_energy = np.mean(spectrum[low_mask], axis=0)
+    if float(np.max(low_energy)) <= 1e-10:
+        return []
+
+    low_energy = low_energy / max(float(np.max(low_energy)), 1e-10)
+    flux = np.maximum(0, np.diff(low_energy, prepend=low_energy[0]))
+    frames = librosa.onset.onset_detect(
+        onset_envelope=flux,
+        sr=sr,
+        hop_length=hop_length,
+        units="frames",
+        pre_max=2,
+        post_max=2,
+        pre_avg=4,
+        post_avg=4,
+        delta=0.025,
+        wait=3,
+    )
+
+    times = librosa.frames_to_time(frames, sr=sr, hop_length=hop_length)
+    events: list[DrumEvent] = []
+    for frame, time in zip(frames, times):
+        confidence = min(0.95, 0.5 + float(flux[min(frame, len(flux) - 1)]) * 2.5)
+        events.append(DrumEvent(time=round(float(time), 3), note="kick", confidence=round(confidence, 3)))
+    return events
+
+
+def _detect_high_frequency_cymbals(y: np.ndarray, sr: int) -> list[DrumEvent]:
+    """Aggressively detect hi-hat/cymbal transients in the 3kHz-15kHz band.
+
+    This detector intentionally favors false positives over missed cymbals. The
+    downstream notation pass can simplify/remove clutter, but it cannot recover
+    a cymbal transient that was never emitted.
+    """
+    hop_length = 256
+    n_fft = 2048
+    spectrum = np.abs(librosa.stft(y, n_fft=n_fft, hop_length=hop_length))
+    freqs = librosa.fft_frequencies(sr=sr, n_fft=n_fft)
+    high_mask = (freqs >= 3000) & (freqs <= min(15000, sr / 2))
+    if not np.any(high_mask):
+        return []
+
+    high_energy = np.mean(spectrum[high_mask], axis=0)
+    if float(np.max(high_energy)) <= 1e-10:
+        return []
+
+    high_energy = high_energy / max(float(np.max(high_energy)), 1e-10)
+    flux = np.maximum(0, np.diff(high_energy, prepend=high_energy[0]))
+    if float(np.max(flux)) <= 1e-10:
+        return []
+
+    frames = librosa.onset.onset_detect(
+        onset_envelope=flux,
+        sr=sr,
+        hop_length=hop_length,
+        units="frames",
+        pre_max=1,
+        post_max=1,
+        pre_avg=2,
+        post_avg=2,
+        delta=0.0001,
+        wait=1,
+    )
+
+    times = librosa.frames_to_time(frames, sr=sr, hop_length=hop_length)
+    events: list[DrumEvent] = []
+    for frame, time in zip(frames, times):
+        start = max(0, librosa.frames_to_samples(frame, hop_length=hop_length) - int(0.012 * sr))
+        end = min(len(y), start + int(0.08 * sr))
+        segment = y[start:end]
+        if segment.size < 32:
+            continue
+
+        note = _classify_cymbal_family(segment, sr)
+        confidence = min(0.92, 0.42 + float(flux[min(frame, len(flux) - 1)]) * 3.5)
+        events.append(DrumEvent(time=round(float(time), 3), note=note, confidence=round(confidence, 3)))
+
+    return events
+
+
+def _classify_cymbal_family(segment: np.ndarray, sr: int) -> DrumNote:
+    centroid = float(librosa.feature.spectral_centroid(y=segment, sr=sr)[0].mean())
+    bandwidth = float(librosa.feature.spectral_bandwidth(y=segment, sr=sr)[0].mean())
+    if centroid > 7200 or bandwidth > 5200:
+        return "crash"
+    if centroid > 5600:
+        return "ride"
+    return "hihat_closed"
 
 
 def _classify_hits(segment: np.ndarray, sr: int) -> list[tuple[DrumNote, float]]:
@@ -86,7 +188,7 @@ def _classify_hits(segment: np.ndarray, sr: int) -> list[tuple[DrumNote, float]]
     if mid_ratio > 0.3 and 900 <= centroid <= 4200:
         hits.append(("snare", min(0.92, 0.5 + mid_ratio)))
 
-    if high_ratio > 0.33 and zcr > 0.055:
+    if high_ratio > 0.08 and zcr > 0.025:
         cymbal_confidence = min(0.95, 0.48 + high_ratio)
         if bandwidth > 4400 or centroid > 6800:
             hits.append(("crash", cymbal_confidence))

@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useRef } from "react";
-import { Articulation, Beam, Formatter, Renderer, Stave, StaveNote, Voice } from "vexflow";
-import type { AnalysisResult, DrumNote, MidiTickEvent, ScoreEvent } from "@/lib/types";
+import { Articulation, Formatter, Renderer, Stave, StaveNote, Voice } from "vexflow";
+import type { AnalysisResult, DrumNote, EngravedMeasure, MidiTickEvent, ScoreEvent } from "@/lib/types";
 
 type Props = { score: AnalysisResult };
 type VoiceNumber = 1 | 2;
@@ -88,11 +88,14 @@ export function DrumSheet({ score }: Props) {
         .joinVoices([upperVoice, lowerVoice])
         .format([upperVoice, lowerVoice], staveWidth - (index === 0 ? 76 : 24));
 
+      prepareStraightBeamStems(upperNotes, upperTicks, 1);
+      prepareStraightBeamStems(lowerNotes, lowerTicks, 2);
+
       upperVoice.draw(context, stave);
       lowerVoice.draw(context, stave);
 
-      drawBeams(context, upperNotes, upperTicks);
-      drawBeams(context, lowerNotes, lowerTicks);
+      drawStraightBeams(context, upperNotes, upperTicks, 1);
+      drawStraightBeams(context, lowerNotes, lowerTicks, 2);
 
       upperTicks.forEach((tick, tickIndex) => {
         drawMixedCymbalHeads(context, upperNotes[tickIndex], tick);
@@ -110,6 +113,10 @@ export function DrumSheet({ score }: Props) {
 }
 
 function simplifyVoice(measure: Measure, voice: VoiceNumber): DisplayTick[] {
+  if (isEngravedDisplayMeasure(measure)) {
+    return voice === 1 ? measure.displayVoice1 : measure.displayVoice2;
+  }
+
   const result: DisplayTick[] = [];
 
   for (let beatStart = 0; beatStart < SLOTS_PER_MEASURE; beatStart += 4) {
@@ -168,6 +175,8 @@ function makeVoiceNote(tick: DisplayTick, voice: VoiceNumber): StaveNote {
     hideTickable(note);
   }
 
+  note.setFlagStyle({ fillStyle: "transparent", strokeStyle: "transparent" });
+
   if (tick.events.some((event) => event.articulation === "accent")) {
     note.addModifier(new Articulation("a>").setPosition(3), 0);
   }
@@ -188,31 +197,108 @@ function hideCymbalKeyHeads(note: StaveNote, events: NotationEvent[], keys: stri
   });
 }
 
-function drawBeams(
+function prepareStraightBeamStems(notes: StaveNote[], ticks: DisplayTick[], voice: VoiceNumber) {
+  for (const group of beatGroups(notes, ticks)) {
+    if (!shouldDrawBeam(group.ticks)) {
+      continue;
+    }
+
+    const visible = visibleGroupItems(group.notes, group.ticks);
+    if (visible.length < 2) {
+      continue;
+    }
+
+    if (voice === 1) {
+      const beamY = Math.min(...visible.map(({ note }) => note.getStemExtents().baseY)) - 34;
+      for (const { note } of visible) {
+        const baseY = note.getStemExtents().baseY;
+        note.setStemLength(Math.max(24, baseY - beamY));
+      }
+    } else {
+      const beamY = Math.max(...visible.map(({ note }) => note.getStemExtents().topY)) + 34;
+      for (const { note } of visible) {
+        const topY = note.getStemExtents().topY;
+        note.setStemLength(Math.max(24, beamY - topY));
+      }
+    }
+  }
+}
+
+function drawStraightBeams(
   context: ReturnType<InstanceType<typeof Renderer>["getContext"]>,
   notes: StaveNote[],
   ticks: DisplayTick[],
+  voice: VoiceNumber,
 ) {
+  for (const group of beatGroups(notes, ticks)) {
+    if (!shouldDrawBeam(group.ticks)) {
+      continue;
+    }
+
+    const visible = visibleGroupItems(group.notes, group.ticks);
+    if (visible.length < 2) {
+      continue;
+    }
+
+    const first = visible[0].note;
+    const last = visible[visible.length - 1].note;
+    const firstExtents = first.getStemExtents();
+    const lastExtents = last.getStemExtents();
+    const x1 = first.getStemX();
+    const x2 = last.getStemX();
+    const y1 = voice === 1 ? firstExtents.topY : firstExtents.baseY;
+    const y2 = voice === 1 ? lastExtents.topY : lastExtents.baseY;
+    const beamCount = group.ticks.some((tick) => tick.duration === "16") ? 2 : 1;
+
+    drawBeamBar(context, x1, y1, x2, y2);
+    if (beamCount === 2) {
+      const offset = voice === 1 ? 8 : -8;
+      drawBeamBar(context, x1, y1 + offset, x2, y2 + offset);
+    }
+  }
+}
+
+function beatGroups(notes: StaveNote[], ticks: DisplayTick[]): Array<{ notes: StaveNote[]; ticks: DisplayTick[] }> {
+  const groups: Array<{ notes: StaveNote[]; ticks: DisplayTick[] }> = [];
   let groupStart = 0;
   while (groupStart < ticks.length) {
     const beat = Math.floor(ticks[groupStart].slot / 4);
     const groupEnd = ticks.findIndex((tick, index) => index > groupStart && Math.floor(tick.slot / 4) !== beat);
     const end = groupEnd === -1 ? ticks.length : groupEnd;
-    const beatTicks = ticks.slice(groupStart, end);
-    const beatNotes = notes.slice(groupStart, end);
-    const visibleCount = beatTicks.filter((tick) => !tick.hiddenRest).length;
-    const beamable = beatTicks.some((tick) => tick.duration === "8" || tick.duration === "16");
-
-    if (visibleCount >= 2 && beamable) {
-      try {
-        new Beam(beatNotes).setContext(context).draw();
-      } catch {
-        // Some rest-heavy beat groups are not beamable in VexFlow.
-      }
-    }
-
+    groups.push({ notes: notes.slice(groupStart, end), ticks: ticks.slice(groupStart, end) });
     groupStart = end;
   }
+  return groups;
+}
+
+function visibleGroupItems(notes: StaveNote[], ticks: DisplayTick[]) {
+  return notes.map((note, index) => ({ note, tick: ticks[index] })).filter((item) => !item.tick.hiddenRest);
+}
+
+function shouldDrawBeam(ticks: DisplayTick[]): boolean {
+  const visibleCount = ticks.filter((tick) => !tick.hiddenRest).length;
+  const beamable = ticks.some((tick) => tick.duration === "8" || tick.duration === "16");
+  return visibleCount >= 2 && beamable;
+}
+
+function drawBeamBar(
+  context: ReturnType<InstanceType<typeof Renderer>["getContext"]>,
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+) {
+  const thickness = 5;
+  context.save();
+  context.setFillStyle("#111317");
+  context.beginPath();
+  context.moveTo(x1, y1);
+  context.lineTo(x2, y2);
+  context.lineTo(x2, y2 + thickness);
+  context.lineTo(x1, y1 + thickness);
+  context.closePath();
+  context.fill();
+  context.restore();
 }
 
 function drawOpenHiHatMark(
@@ -296,11 +382,63 @@ function hideTickable(note: StaveNote) {
 }
 
 function toMeasures(score: AnalysisResult): Measure[] {
+  if (score.engraved_measures?.length) {
+    return measuresFromEngraved(score.engraved_measures);
+  }
+
   if (score.midi_ticks?.length) {
     return measuresFromMidiTicks(score.midi_ticks);
   }
 
   return measuresFromScoreEvents(score.events, score.bpm);
+}
+
+type EngravedDisplayMeasure = Measure & {
+  displayVoice1: DisplayTick[];
+  displayVoice2: DisplayTick[];
+};
+
+function isEngravedDisplayMeasure(measure: Measure): measure is EngravedDisplayMeasure {
+  return "displayVoice1" in measure && "displayVoice2" in measure;
+}
+
+function measuresFromEngraved(engravedMeasures: EngravedMeasure[]): EngravedDisplayMeasure[] {
+  return engravedMeasures.map((measure) => {
+    const slots = emptySlots();
+    const displayVoice1 = measure.voice1.map((tick) => engravedTickToDisplayTick(tick, slots));
+    const displayVoice2 = measure.voice2.map((tick) => engravedTickToDisplayTick(tick, slots));
+    return { slots, displayVoice1, displayVoice2 };
+  });
+}
+
+function engravedTickToDisplayTick(
+  tick: EngravedMeasure["voice1"][number],
+  slots: MeasureSlot[],
+): DisplayTick {
+  const events = tick.events.map((event) => ({
+    drum: event.drum,
+    staff_key: event.staff_key,
+    voice: tick.voice,
+    notehead: event.notehead,
+    articulation: event.articulation,
+    lyric: event.lyric,
+    confidence: event.confidence,
+  }));
+
+  const slot = slots[Math.min(SLOTS_PER_MEASURE - 1, Math.max(0, tick.slot))];
+  if (tick.voice === 1) {
+    slot.voice1 = dedupeNotationEvents([...slot.voice1, ...events]);
+  } else {
+    slot.voice2 = dedupeNotationEvents([...slot.voice2, ...events]);
+  }
+  slot.lyric = slot.lyric ?? tick.lyric ?? events.find((event) => event.lyric)?.lyric ?? null;
+
+  return {
+    slot: tick.slot,
+    duration: tick.duration,
+    events,
+    hiddenRest: tick.rest,
+  };
 }
 
 function measuresFromMidiTicks(ticks: MidiTickEvent[]): Measure[] {
