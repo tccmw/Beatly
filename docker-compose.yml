@@ -7,7 +7,7 @@ services:
       BEATLY_UPLOAD_DIR: /tmp/beatly/uploads
       BEATLY_SEPARATED_DIR: /tmp/beatly/separated
       BEATLY_USE_STUBS: "false"
-      WHISPER_MODEL: small
+      WHISPER_MODEL: tiny
     ports:
       - "8000:8000"
     volumes:
