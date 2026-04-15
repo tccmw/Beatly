@@ -9,7 +9,13 @@ class Settings(BaseSettings):
     upload_dir: Path = Field(default=Path("uploads"), alias="BEATLY_UPLOAD_DIR")
     separated_dir: Path = Field(default=Path("separated"), alias="BEATLY_SEPARATED_DIR")
     whisper_model: str = Field(default="small", alias="WHISPER_MODEL")
+    enable_lyrics: bool = Field(default=True, alias="BEATLY_ENABLE_LYRICS")
     use_stubs: bool = Field(default=False, alias="BEATLY_USE_STUBS")
+    demucs_model: str = Field(default="htdemucs", alias="DEMUCS_MODEL")
+    demucs_mode: str = Field(default="full", alias="DEMUCS_MODE")
+    demucs_device: str | None = Field(default=None, alias="DEMUCS_DEVICE")
+    demucs_jobs: int = Field(default=0, alias="DEMUCS_JOBS")
+    demucs_segment_seconds: int | None = Field(default=None, alias="DEMUCS_SEGMENT_SECONDS")
 
 
 @lru_cache

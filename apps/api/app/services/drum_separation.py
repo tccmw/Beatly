@@ -16,7 +16,16 @@ class StemPaths:
     vocals: Path
 
 
-def separate_stems_with_demucs(input_audio: Path, output_dir: Path, use_stub: bool = False) -> StemPaths:
+def separate_stems_with_demucs(
+    input_audio: Path,
+    output_dir: Path,
+    use_stub: bool = False,
+    model_name: str = "htdemucs",
+    mode: str = "full",
+    device: str | None = None,
+    jobs: int = 0,
+    segment_seconds: int | None = None,
+) -> StemPaths:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     if use_stub:
@@ -26,26 +35,38 @@ def separate_stems_with_demucs(input_audio: Path, output_dir: Path, use_stub: bo
         shutil.copyfile(input_audio, vocal_stub)
         return StemPaths(drums=drum_stub, vocals=vocal_stub)
 
+    normalized_mode = mode.lower().strip()
+    if normalized_mode in {"none", "off", "skip"}:
+        return StemPaths(drums=input_audio, vocals=input_audio)
+
     command = [
         "python",
         "-m",
         "demucs.separate",
         "--name",
-        "htdemucs",
+        model_name,
         "--out",
         str(output_dir),
-        str(input_audio),
     ]
+    if normalized_mode == "vocals":
+        command.extend(["--two-stems", "vocals"])
+    if device:
+        command.extend(["--device", device])
+    if jobs > 0:
+        command.extend(["-j", str(jobs)])
+    if segment_seconds and segment_seconds > 0:
+        command.extend(["--segment", str(segment_seconds)])
+    command.append(str(input_audio))
 
     completed = subprocess.run(command, capture_output=True, text=True, check=False)
     if completed.returncode != 0:
         raise DrumSeparationError(completed.stderr or completed.stdout)
 
-    stem_dir = output_dir / "htdemucs" / input_audio.stem
-    drum_path = stem_dir / "drums.wav"
+    stem_dir = output_dir / model_name / input_audio.stem
+    drum_path = stem_dir / ("no_vocals.wav" if normalized_mode == "vocals" else "drums.wav")
     vocal_path = stem_dir / "vocals.wav"
     if not drum_path.exists():
-        raise DrumSeparationError(f"Demucs completed, but drum stem was not found at {drum_path}")
+        raise DrumSeparationError(f"Demucs completed, but analysis stem was not found at {drum_path}")
     if not vocal_path.exists():
         raise DrumSeparationError(f"Demucs completed, but vocal stem was not found at {vocal_path}")
 
