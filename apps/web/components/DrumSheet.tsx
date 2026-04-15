@@ -89,13 +89,11 @@ export function DrumSheet({ score }: Props) {
         .format([upperVoice, lowerVoice], staveWidth - (index === 0 ? 76 : 24));
 
       prepareStraightBeamStems(upperNotes, upperTicks, 1);
-      prepareStraightBeamStems(lowerNotes, lowerTicks, 2);
 
       upperVoice.draw(context, stave);
       lowerVoice.draw(context, stave);
 
       drawStraightBeams(context, upperNotes, upperTicks, 1);
-      drawStraightBeams(context, lowerNotes, lowerTicks, 2);
 
       upperTicks.forEach((tick, tickIndex) => {
         drawHiHatStateMarks(context, upperNotes[tickIndex], tick);

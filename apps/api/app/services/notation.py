@@ -506,7 +506,7 @@ def _sanitize_engraved_measures(measures: list[EngravedMeasure]) -> list[Engrave
     sanitized: list[EngravedMeasure] = []
     for measure in measures:
         voice1 = _sanitize_voice_ticks(measure.voice1, 1)
-        voice2 = _sanitize_voice_ticks(measure.voice2, 2)
+        voice2 = _sanitize_bass_voice_ticks(measure.voice2)
         sanitized.append(EngravedMeasure(measure=measure.measure, voice1=voice1, voice2=voice2))
     return sanitized
 
@@ -530,6 +530,55 @@ def _sanitize_voice_ticks(ticks: list[EngravedTick], voice: int) -> list[Engrave
         )
 
     return _rebalance_voice_to_4_4(cleaned, voice)
+
+
+def _sanitize_bass_voice_ticks(ticks: list[EngravedTick]) -> list[EngravedTick]:
+    """Bass drum output policy: no beamed 16th groups in the lower voice."""
+    kick_slots = {
+        tick.slot
+        for tick in ticks
+        if not tick.rest and any(event.drum == "kick" for event in tick.events)
+    }
+    kick_events = {
+        tick.slot: [event for event in tick.events if event.drum == "kick"][:1]
+        for tick in ticks
+        if not tick.rest
+    }
+
+    output: list[EngravedTick] = []
+    for beat_start in range(0, SLOTS_PER_MEASURE, 4):
+        beat_kicks = sorted(slot for slot in kick_slots if beat_start <= slot < beat_start + 4)
+
+        if not beat_kicks:
+            output.append(_engraved_rest(beat_start, "q", 2))
+            continue
+
+        if len(beat_kicks) == 1:
+            slot = beat_kicks[0]
+            if slot == beat_start:
+                output.append(_engraved_note(slot, "q", 2, kick_events[slot]))
+            else:
+                for eighth_slot in (beat_start, beat_start + 2):
+                    if abs(slot - eighth_slot) <= 1:
+                        output.append(_engraved_note(eighth_slot, "8", 2, kick_events[slot]))
+                    else:
+                        output.append(_engraved_rest(eighth_slot, "8", 2))
+            continue
+
+        by_eighth: dict[int, list[EngravedEvent]] = {}
+        for slot in beat_kicks:
+            target = beat_start if slot < beat_start + 2 else beat_start + 2
+            by_eighth.setdefault(target, kick_events[slot])
+
+        for eighth_slot in (beat_start, beat_start + 2):
+            events = by_eighth.get(eighth_slot)
+            output.append(
+                _engraved_note(eighth_slot, "8", 2, events)
+                if events
+                else _engraved_rest(eighth_slot, "8", 2)
+            )
+
+    return output
 
 
 def _sanitize_tick_events(events: list[EngravedEvent], voice: int) -> list[EngravedEvent]:
