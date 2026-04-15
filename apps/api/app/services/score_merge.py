@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.models import DrumEvent, LyricWord, ScoreEvent
+from app.models import DrumEvent, LyricSlot, LyricWord, ScoreEvent
 
 
 def merge_drums_and_lyrics(
@@ -8,38 +8,40 @@ def merge_drums_and_lyrics(
     words: list[LyricWord],
     lyric_window_seconds: float = 0.18,
 ) -> list[ScoreEvent]:
-    events: list[ScoreEvent] = []
-    word_index = 0
-    sorted_words = sorted(words, key=lambda word: word.start)
+    """Convert drum events into score events without binding lyrics to hits.
 
-    for drum in sorted(drum_events, key=lambda event: event.time):
-        while word_index + 1 < len(sorted_words) and sorted_words[word_index].end < drum.time:
-            word_index += 1
-
-        lyric = _word_at_time(sorted_words, drum.time, word_index, lyric_window_seconds)
-        events.append(
-            ScoreEvent(
-                time=drum.time,
-                note=drum.note,
-                lyric=lyric,
-                confidence=drum.confidence,
-            )
+    Lyrics are maintained as an independent timeline. The notation layer maps
+    them to 16th-note slots so words remain visible even when no drum is hit.
+    """
+    return [
+        ScoreEvent(
+            time=drum.time,
+            note=drum.note,
+            lyric=None,
+            confidence=drum.confidence,
         )
+        for drum in sorted(drum_events, key=lambda event: event.time)
+    ]
 
-    return events
 
+def build_lyric_lane(words: list[LyricWord], bpm: float, measure_count: int) -> dict[int, list[LyricSlot]]:
+    beat_seconds = 60 / max(bpm, 1)
+    measure_seconds = beat_seconds * 4
+    slot_seconds = measure_seconds / 16
+    lane: dict[int, dict[int, list[str]]] = {measure: {} for measure in range(1, measure_count + 1)}
 
-def _word_at_time(
-    words: list[LyricWord],
-    time: float,
-    preferred_index: int,
-    window: float,
-) -> str | None:
-    if not words:
-        return None
+    for word in sorted(words, key=lambda item: item.start):
+        measure_index = int(word.start // measure_seconds)
+        if measure_index < 0 or measure_index >= measure_count:
+            continue
+        measure_start = measure_index * measure_seconds
+        slot = min(15, max(0, int((word.start - measure_start) // slot_seconds)))
+        lane.setdefault(measure_index + 1, {}).setdefault(slot, []).append(word.word)
 
-    candidates = words[max(0, preferred_index - 1) : min(len(words), preferred_index + 3)]
-    for word in candidates:
-        if word.start - window <= time <= word.end + window:
-            return word.word
-    return None
+    return {
+        measure: [
+            LyricSlot(slot=slot, lyric=" ".join(tokens))
+            for slot, tokens in sorted(slots.items())
+        ]
+        for measure, slots in lane.items()
+    }

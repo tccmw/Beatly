@@ -2,7 +2,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.models import DrumNote, EngravedEvent, EngravedMeasure, EngravedTick, MidiTickEvent, ScoreEvent
+from app.models import (
+    DrumNote,
+    EngravedEvent,
+    EngravedMeasure,
+    EngravedSlot,
+    EngravedTick,
+    LyricSlot,
+    MidiTickEvent,
+    ScoreEvent,
+)
 
 TICKS_PER_QUARTER = 480
 SIXTEENTH_TICKS = TICKS_PER_QUARTER // 4
@@ -89,7 +98,10 @@ def build_midi_tick_list(events: list[ScoreEvent], bpm: float) -> list[MidiTickE
     return tick_events
 
 
-def build_engraved_measures(midi_ticks: list[MidiTickEvent]) -> list[EngravedMeasure]:
+def build_engraved_measures(
+    midi_ticks: list[MidiTickEvent],
+    lyric_lane: dict[int, list[LyricSlot]] | None = None,
+) -> list[EngravedMeasure]:
     """Return complete, human-readable 4/4 drum notation JSON.
 
     Absolute constraints:
@@ -102,10 +114,12 @@ def build_engraved_measures(midi_ticks: list[MidiTickEvent]) -> list[EngravedMea
     for event in midi_ticks:
         grouped.setdefault(event.measure, []).append(event)
 
-    measure_count = max(grouped.keys(), default=1)
+    lyric_measure_count = max(lyric_lane.keys(), default=1) if lyric_lane else 1
+    measure_count = max(max(grouped.keys(), default=1), lyric_measure_count)
     measures: list[EngravedMeasure] = []
     for measure_number in range(1, measure_count + 1):
         slots = _empty_measure_slots()
+        measure_lyrics = lyric_lane.get(measure_number, []) if lyric_lane else []
         for event in grouped.get(measure_number, []):
             slot = min(SLOTS_PER_MEASURE - 1, max(0, event.slot))
             voice = 1 if event.voice == 1 else 2
@@ -129,6 +143,8 @@ def build_engraved_measures(midi_ticks: list[MidiTickEvent]) -> list[EngravedMea
                 measure=measure_number,
                 voice1=_engrave_voice(slots, 1),
                 voice2=_engrave_voice(slots, 2),
+                slots=_engraved_slots_from_lyric_slots(measure_lyrics),
+                lyric_slots=measure_lyrics,
             )
         )
     return _sanitize_engraved_measures(measures)
@@ -507,7 +523,16 @@ def _sanitize_engraved_measures(measures: list[EngravedMeasure]) -> list[Engrave
     for measure in measures:
         voice1 = _sanitize_voice_ticks(measure.voice1, 1)
         voice2 = _sanitize_bass_voice_ticks(measure.voice2)
-        sanitized.append(EngravedMeasure(measure=measure.measure, voice1=voice1, voice2=voice2))
+        lyric_slots = _sanitize_lyric_slots(measure.lyric_slots)
+        sanitized.append(
+            EngravedMeasure(
+                measure=measure.measure,
+                voice1=voice1,
+                voice2=voice2,
+                slots=_engraved_slots_from_lyric_slots(lyric_slots),
+                lyric_slots=lyric_slots,
+            )
+        )
     return sanitized
 
 
@@ -637,3 +662,25 @@ def _rebalance_voice_to_4_4(ticks: list[EngravedTick], voice: int) -> list[Engra
             )
 
     return balanced
+
+
+def _sanitize_lyric_slots(slots: list[LyricSlot]) -> list[LyricSlot]:
+    by_slot: dict[int, list[str]] = {}
+    for slot in slots:
+        index = min(SLOTS_PER_MEASURE - 1, max(0, slot.slot))
+        text = slot.lyric.strip()
+        if text:
+            by_slot.setdefault(index, []).append(text)
+
+    return [
+        LyricSlot(slot=slot, lyric=" ".join(parts))
+        for slot, parts in sorted(by_slot.items())
+    ]
+
+
+def _engraved_slots_from_lyric_slots(lyric_slots: list[LyricSlot]) -> list[EngravedSlot]:
+    lyric_by_slot = {slot.slot: slot.lyric for slot in lyric_slots}
+    return [
+        EngravedSlot(slot=slot, lyric=lyric_by_slot.get(slot))
+        for slot in range(SLOTS_PER_MEASURE)
+    ]

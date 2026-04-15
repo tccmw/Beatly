@@ -62,10 +62,22 @@ class EngravedTick(BaseModel):
     lyric: str | None = None
 
 
+class LyricSlot(BaseModel):
+    slot: int
+    lyric: str
+
+
+class EngravedSlot(BaseModel):
+    slot: int
+    lyric: str | None = None
+
+
 class EngravedMeasure(BaseModel):
     measure: int
     voice1: list[EngravedTick]
     voice2: list[EngravedTick]
+    slots: list[EngravedSlot] = Field(default_factory=list)
+    lyric_slots: list[LyricSlot] = Field(default_factory=list)
 
 
 class AnalysisResult(BaseModel):
@@ -73,5 +85,5 @@ class AnalysisResult(BaseModel):
     events: list[ScoreEvent]
     words: list[LyricWord]
     ticks_per_quarter: int = 480
-    midi_ticks: list[MidiTickEvent] = []
-    engraved_measures: list[EngravedMeasure] = []
+    midi_ticks: list[MidiTickEvent] = Field(default_factory=list)
+    engraved_measures: list[EngravedMeasure] = Field(default_factory=list)

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef } from "react";
 import { Articulation, Formatter, Renderer, Stave, StaveNote, Voice } from "vexflow";
-import type { AnalysisResult, DrumNote, EngravedMeasure, MidiTickEvent, ScoreEvent } from "@/lib/types";
+import type { AnalysisResult, DrumNote, EngravedMeasure, LyricWord, MidiTickEvent, ScoreEvent } from "@/lib/types";
 
 type Props = { score: AnalysisResult };
 type VoiceNumber = 1 | 2;
@@ -58,7 +58,7 @@ export function DrumSheet({ score }: Props) {
     renderer.resize(width, height);
 
     const context = renderer.getContext();
-    context.setFont("Arial", 12);
+    context.setFont("Arial, Malgun Gothic, sans-serif", 12);
 
     measures.forEach((measure, index) => {
       const column = index % MEASURES_PER_LINE;
@@ -98,8 +98,8 @@ export function DrumSheet({ score }: Props) {
       upperTicks.forEach((tick, tickIndex) => {
         drawHiHatStateMarks(context, upperNotes[tickIndex], tick);
         drawGhostSnareMarks(context, upperNotes[tickIndex], tick);
-        drawLyricAtTick(context, upperNotes[tickIndex], measure, tick.slot, y);
       });
+      drawLyricLane(context, stave, measure, upperNotes, upperTicks, y);
     });
   }, [measures]);
 
@@ -336,28 +336,43 @@ function drawGhostSnareMarks(
   const y = note.getYs()[keyIndex] ?? note.getYs()[0] ?? 0;
   const x = note.getAbsoluteX();
   context.save();
-  context.setFont("Arial", 13);
+  context.setFont("Arial, Malgun Gothic, sans-serif", 13);
   context.fillText("(", x - 12, y + 4);
   context.fillText(")", x + 8, y + 4);
   context.restore();
 }
 
-function drawLyricAtTick(
+function drawLyricLane(
   context: ReturnType<InstanceType<typeof Renderer>["getContext"]>,
-  note: StaveNote,
+  stave: Stave,
   measure: Measure,
-  slot: number,
+  notes: StaveNote[],
+  ticks: DisplayTick[],
   staveY: number,
 ) {
-  const lyric = measure.slots[slot]?.lyric?.trim();
-  if (!lyric) {
-    return;
-  }
+  const noteXBySlot = new Map<number, number>();
+  ticks.forEach((tick, index) => {
+    noteXBySlot.set(tick.slot, notes[index].getAbsoluteX());
+  });
 
   context.save();
   context.setFont("Arial", 13);
-  context.fillText(lyric, note.getAbsoluteX() - 10, staveY + 116);
+  measure.slots.forEach((slot, slotIndex) => {
+    const lyric = slot.lyric?.trim();
+    if (!lyric) {
+      return;
+    }
+
+    const x = noteXBySlot.get(slotIndex) ?? slotToX(stave, slotIndex);
+    context.fillText(lyric, x - 10, staveY + 126);
+  });
   context.restore();
+}
+
+function slotToX(stave: Stave, slot: number): number {
+  const startX = stave.getNoteStartX();
+  const endX = stave.getNoteEndX();
+  return startX + (slot / SLOTS_PER_MEASURE) * (endX - startX);
 }
 
 function drawMeasureNumber(
@@ -373,15 +388,16 @@ function drawMeasureNumber(
 }
 
 function toMeasures(score: AnalysisResult): Measure[] {
+  let measures: Measure[];
   if (score.engraved_measures?.length) {
-    return measuresFromEngraved(score.engraved_measures);
+    measures = measuresFromEngraved(score.engraved_measures);
+  } else if (score.midi_ticks?.length) {
+    measures = measuresFromMidiTicks(score.midi_ticks);
+  } else {
+    measures = measuresFromScoreEvents(score.events, score.bpm);
   }
 
-  if (score.midi_ticks?.length) {
-    return measuresFromMidiTicks(score.midi_ticks);
-  }
-
-  return measuresFromScoreEvents(score.events, score.bpm);
+  return applyWordsFallback(measures, score.words, score.bpm);
 }
 
 type EngravedDisplayMeasure = Measure & {
@@ -396,6 +412,14 @@ function isEngravedDisplayMeasure(measure: Measure): measure is EngravedDisplayM
 function measuresFromEngraved(engravedMeasures: EngravedMeasure[]): EngravedDisplayMeasure[] {
   return engravedMeasures.map((measure) => {
     const slots = emptySlots();
+    for (const apiSlot of measure.slots ?? []) {
+      const slot = slots[Math.min(SLOTS_PER_MEASURE - 1, Math.max(0, apiSlot.slot))];
+      slot.lyric = mergeLyric(slot.lyric, apiSlot.lyric ?? null);
+    }
+    for (const lyricSlot of measure.lyric_slots ?? []) {
+      const slot = slots[Math.min(SLOTS_PER_MEASURE - 1, Math.max(0, lyricSlot.slot))];
+      slot.lyric = mergeLyric(slot.lyric, lyricSlot.lyric);
+    }
     const displayVoice1 = measure.voice1.map((tick) => engravedTickToDisplayTick(tick, slots));
     const displayVoice2 = measure.voice2.map((tick) => engravedTickToDisplayTick(tick, slots));
     return { slots, displayVoice1, displayVoice2 };
@@ -422,7 +446,7 @@ function engravedTickToDisplayTick(
   } else {
     slot.voice2 = dedupeNotationEvents([...slot.voice2, ...events]);
   }
-  slot.lyric = slot.lyric ?? tick.lyric ?? events.find((event) => event.lyric)?.lyric ?? null;
+  slot.lyric = mergeLyric(slot.lyric, tick.lyric ?? events.find((event) => event.lyric)?.lyric ?? null);
 
   return {
     slot: tick.slot,
@@ -457,7 +481,7 @@ function measuresFromMidiTicks(ticks: MidiTickEvent[]): Measure[] {
         confidence: tick.confidence,
       };
       addNotationEvent(slot, event);
-      slot.lyric = slot.lyric ?? tick.lyric ?? null;
+      slot.lyric = mergeLyric(slot.lyric, tick.lyric ?? null);
     }
     return { slots };
   });
@@ -485,10 +509,57 @@ function measuresFromScoreEvents(events: ScoreEvent[], bpm: number): Measure[] {
       );
       const slot = slots[slotIndex];
       addNotationEvent(slot, scoreEventToNotationEvent(event));
-      slot.lyric = slot.lyric ?? event.lyric ?? null;
+      slot.lyric = mergeLyric(slot.lyric, event.lyric ?? null);
     }
     return { slots };
   });
+}
+
+function applyWordsFallback(measures: Measure[], words: LyricWord[], bpm: number): Measure[] {
+  if (!words?.length) {
+    return measures;
+  }
+
+  const beatSeconds = 60 / Math.max(bpm || 120, 1);
+  const measureSeconds = beatSeconds * 4;
+  const slotSeconds = measureSeconds / SLOTS_PER_MEASURE;
+
+  for (const word of words) {
+    const measureIndex = Math.max(0, Math.floor(word.start / measureSeconds));
+    const measure = ensureMeasure(measures, measureIndex);
+
+    const measureStart = measureIndex * measureSeconds;
+    const slotIndex = Math.min(
+      SLOTS_PER_MEASURE - 1,
+      Math.max(0, Math.floor((word.start - measureStart) / slotSeconds)),
+    );
+    measure.slots[slotIndex].lyric = mergeLyric(measure.slots[slotIndex].lyric, word.word);
+  }
+
+  return measures;
+}
+
+function ensureMeasure(measures: Measure[], measureIndex: number): Measure {
+  while (measures.length <= measureIndex) {
+    measures.push({ slots: emptySlots() });
+  }
+  return measures[measureIndex];
+}
+
+function mergeLyric(current: string | null | undefined, next: string | null | undefined): string | null {
+  const cleanNext = next?.trim();
+  if (!cleanNext) {
+    return current ?? null;
+  }
+
+  const cleanCurrent = current?.trim();
+  if (!cleanCurrent) {
+    return cleanNext;
+  }
+  if (cleanCurrent.split(/\s+/).includes(cleanNext)) {
+    return cleanCurrent;
+  }
+  return `${cleanCurrent} ${cleanNext}`;
 }
 
 function emptySlots(): MeasureSlot[] {

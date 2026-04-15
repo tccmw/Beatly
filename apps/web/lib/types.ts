@@ -55,10 +55,22 @@ export type EngravedTick = {
   lyric?: string | null;
 };
 
+export type LyricSlot = {
+  slot: number;
+  lyric: string;
+};
+
+export type EngravedSlot = {
+  slot: number;
+  lyric?: string | null;
+};
+
 export type EngravedMeasure = {
   measure: number;
   voice1: EngravedTick[];
   voice2: EngravedTick[];
+  slots?: EngravedSlot[];
+  lyric_slots: LyricSlot[];
 };
 
 export type AnalysisResult = {

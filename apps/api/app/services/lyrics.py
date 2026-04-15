@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 from app.models import LyricWord
+
+
+def preload_whisper_model(model_name: str = "small") -> None:
+    """Warm the cached Whisper model during FastAPI startup."""
+    _load_whisper_model(model_name)
 
 
 def transcribe_words_with_whisper(
@@ -18,9 +24,7 @@ def transcribe_words_with_whisper(
             LyricWord(word="drummer", start=2.05, end=2.6),
         ]
 
-    import whisper
-
-    model = whisper.load_model(model_name)
+    model = _load_whisper_model(model_name)
     result: dict[str, Any] = model.transcribe(
         str(audio_path),
         word_timestamps=True,
@@ -42,3 +46,10 @@ def transcribe_words_with_whisper(
                 )
             )
     return words
+
+
+@lru_cache(maxsize=2)
+def _load_whisper_model(model_name: str):
+    import whisper
+
+    return whisper.load_model(model_name)
