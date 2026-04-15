@@ -29,7 +29,7 @@ const NOTE_MAP: Record<DrumNote, { key: string; voice: VoiceNumber; notehead: "n
   hihat_closed: { key: "g/5", voice: 1, notehead: "x", order: 2 },
   ride: { key: "f/5", voice: 1, notehead: "x", order: 3 },
   snare: { key: "c/5", voice: 1, notehead: "normal", order: 4 },
-  tom: { key: "e/5", voice: 2, notehead: "normal", order: 5 },
+  tom: { key: "e/5", voice: 1, notehead: "normal", order: 5 },
   kick: { key: "f/4", voice: 2, notehead: "normal", order: 6 },
 };
 
@@ -98,8 +98,8 @@ export function DrumSheet({ score }: Props) {
       drawStraightBeams(context, lowerNotes, lowerTicks, 2);
 
       upperTicks.forEach((tick, tickIndex) => {
-        drawMixedCymbalHeads(context, upperNotes[tickIndex], tick);
-        drawOpenHiHatMark(context, upperNotes[tickIndex], tick);
+        drawHiHatStateMarks(context, upperNotes[tickIndex], tick);
+        drawGhostSnareMarks(context, upperNotes[tickIndex], tick);
         drawLyricAtTick(context, upperNotes[tickIndex], measure, tick.slot, y);
       });
     });
@@ -159,21 +159,16 @@ function simplifyVoice(measure: Measure, voice: VoiceNumber): DisplayTick[] {
 }
 
 function makeVoiceNote(tick: DisplayTick, voice: VoiceNumber): StaveNote {
-  const keys = tick.events.length > 0 ? uniqueKeys(tick.events) : [voice === 1 ? "g/5" : "f/4"];
-  const hasOnlyXHeads = tick.events.length > 0 && tick.events.every((event) => event.notehead === "x");
-  const hasMixedHeads =
-    tick.events.some((event) => event.notehead === "x") && tick.events.some((event) => event.notehead === "normal");
+  const renderEvents = renderableEvents(tick.events);
+  const keys = renderEvents.length > 0 ? uniqueKeys(renderEvents) : [voice === 1 ? "g/5" : "f/4"];
+  const hasOnlyXHeads = renderEvents.length > 0 && renderEvents.every((event) => event.notehead === "x");
   const note = new StaveNote({
     clef: "percussion",
     keys,
     ...(hasOnlyXHeads ? { type: "x" } : {}),
-    duration: tick.hiddenRest ? `${tick.duration}r` : tick.duration,
+    duration: tick.hiddenRest || renderEvents.length === 0 ? `${tick.duration}r` : tick.duration,
     stem_direction: voice === 1 ? 1 : -1,
   });
-
-  if (tick.hiddenRest) {
-    hideTickable(note);
-  }
 
   note.setFlagStyle({ fillStyle: "transparent", strokeStyle: "transparent" });
 
@@ -181,20 +176,16 @@ function makeVoiceNote(tick: DisplayTick, voice: VoiceNumber): StaveNote {
     note.addModifier(new Articulation("a>").setPosition(3), 0);
   }
 
-  if (hasMixedHeads) {
-    hideCymbalKeyHeads(note, tick.events, keys);
-  }
-
   return note;
 }
 
-function hideCymbalKeyHeads(note: StaveNote, events: NotationEvent[], keys: string[]) {
-  const cymbalKeys = new Set(events.filter((event) => event.notehead === "x").map((event) => event.staff_key));
-  keys.forEach((key, index) => {
-    if (cymbalKeys.has(key)) {
-      note.setKeyStyle(index, { fillStyle: "transparent", strokeStyle: "transparent" });
-    }
-  });
+function renderableEvents(events: NotationEvent[]): NotationEvent[] {
+  const hasNormalHead = events.some((event) => event.notehead === "normal");
+  if (!hasNormalHead) {
+    return events;
+  }
+
+  return events.filter((event) => event.notehead === "normal");
 }
 
 function prepareStraightBeamStems(notes: StaveNote[], ticks: DisplayTick[], voice: VoiceNumber) {
@@ -301,49 +292,50 @@ function drawBeamBar(
   context.restore();
 }
 
-function drawOpenHiHatMark(
+function drawHiHatStateMarks(
   context: ReturnType<InstanceType<typeof Renderer>["getContext"]>,
   note: StaveNote,
   tick: DisplayTick,
 ) {
-  if (!tick.events.some((event) => event.articulation === "open")) {
-    return;
-  }
-
-  const y = note.getYs()[0] ?? 0;
-  context.save();
-  context.setFont("Arial", 11);
-  context.fillText("o", note.getAbsoluteX() - 4, y - 10);
-  context.restore();
-}
-
-function drawMixedCymbalHeads(
-  context: ReturnType<InstanceType<typeof Renderer>["getContext"]>,
-  note: StaveNote,
-  tick: DisplayTick,
-) {
-  const hasMixedHeads =
-    tick.events.some((event) => event.notehead === "x") && tick.events.some((event) => event.notehead === "normal");
-  if (!hasMixedHeads) {
+  const renderEvents = renderableEvents(tick.events);
+  const hatEvents = renderEvents.filter((event) => event.drum === "hihat_open" || event.drum === "hihat_closed");
+  if (!hatEvents.length) {
     return;
   }
 
   const keys = uniqueKeys(tick.events);
   const ys = note.getYs();
-  const drawn = new Set<string>();
-  for (const event of tick.events) {
-    if (event.notehead !== "x" || drawn.has(event.staff_key)) {
-      continue;
-    }
-
+  for (const event of hatEvents) {
     const keyIndex = Math.max(0, keys.indexOf(event.staff_key));
     const y = ys[keyIndex] ?? ys[0] ?? 0;
+    const mark = event.articulation === "open" ? "o" : "+";
     context.save();
-    context.setFont("Arial", 15, "bold");
-    context.fillText("x", note.getAbsoluteX() - 4, y + 5);
+    context.setFont("Arial", 11);
+    context.fillText(mark, note.getAbsoluteX() - 4, y - 10);
     context.restore();
-    drawn.add(event.staff_key);
   }
+}
+
+function drawGhostSnareMarks(
+  context: ReturnType<InstanceType<typeof Renderer>["getContext"]>,
+  note: StaveNote,
+  tick: DisplayTick,
+) {
+  const renderEvents = renderableEvents(tick.events);
+  const ghostSnare = renderEvents.find((event) => event.drum === "snare" && event.articulation === "ghost");
+  if (!ghostSnare) {
+    return;
+  }
+
+  const keys = uniqueKeys(renderEvents);
+  const keyIndex = Math.max(0, keys.indexOf(ghostSnare.staff_key));
+  const y = note.getYs()[keyIndex] ?? note.getYs()[0] ?? 0;
+  const x = note.getAbsoluteX();
+  context.save();
+  context.setFont("Arial", 13);
+  context.fillText("(", x - 12, y + 4);
+  context.fillText(")", x + 8, y + 4);
+  context.restore();
 }
 
 function drawLyricAtTick(
@@ -374,11 +366,6 @@ function drawMeasureNumber(
   context.setFont("Arial", 10);
   context.fillText(String(measureNumber), x + 4, y - 3);
   context.restore();
-}
-
-function hideTickable(note: StaveNote) {
-  note.setStyle({ fillStyle: "transparent", strokeStyle: "transparent" });
-  note.setLedgerLineStyle({ strokeStyle: "transparent" });
 }
 
 function toMeasures(score: AnalysisResult): Measure[] {
@@ -547,7 +534,7 @@ function scoreEventToNotationEvent(event: ScoreEvent): NotationEvent {
     staff_key: mapping.key,
     voice: mapping.voice,
     notehead: mapping.notehead,
-    articulation: event.note === "hihat_open" ? "open" : "none",
+    articulation: event.note === "hihat_open" ? "open" : event.note === "hihat_closed" ? "closed" : "none",
     lyric: event.lyric,
     confidence: event.confidence,
   };

@@ -30,7 +30,7 @@ export type MidiTickEvent = {
   drum: DrumNote;
   staff_key: string;
   notehead: "normal" | "x";
-  articulation: "accent" | "open" | "none";
+  articulation: "accent" | "open" | "closed" | "ghost" | "none";
   lyric?: string | null;
   confidence: number;
 };
@@ -40,7 +40,7 @@ export type EngravedEvent = {
   midi_note: number;
   staff_key: string;
   notehead: "normal" | "x";
-  articulation: "accent" | "open" | "none";
+  articulation: "accent" | "open" | "closed" | "ghost" | "none";
   lyric?: string | null;
   confidence: number;
 };

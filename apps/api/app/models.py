@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 DrumNote = Literal["kick", "snare", "hihat_closed", "hihat_open", "tom", "crash", "ride"]
 NotationVoice = Literal[1, 2]
+Articulation = Literal["accent", "open", "closed", "ghost", "none"]
 
 
 class LyricWord(BaseModel):
@@ -36,7 +37,7 @@ class MidiTickEvent(BaseModel):
     drum: DrumNote
     staff_key: str
     notehead: Literal["normal", "x"]
-    articulation: Literal["accent", "open", "none"] = "none"
+    articulation: Articulation = "none"
     lyric: str | None = None
     confidence: float = Field(ge=0, le=1)
 
@@ -46,7 +47,7 @@ class EngravedEvent(BaseModel):
     midi_note: int
     staff_key: str
     notehead: Literal["normal", "x"]
-    articulation: Literal["accent", "open", "none"] = "none"
+    articulation: Articulation = "none"
     lyric: str | None = None
     confidence: float = Field(ge=0, le=1)
 

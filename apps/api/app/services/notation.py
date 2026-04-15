@@ -9,10 +9,13 @@ SIXTEENTH_TICKS = TICKS_PER_QUARTER // 4
 MEASURE_TICKS = TICKS_PER_QUARTER * 4
 SLOTS_PER_MEASURE = 16
 CLUSTER_WINDOW_SECONDS = 0.03
+VELOCITY_FLOOR_RATIO = 0.3
 CYMBALS: set[DrumNote] = {"hihat_closed", "hihat_open", "ride", "crash"}
 HAND_DRUMS: set[DrumNote] = {*CYMBALS, "snare"}
+FINAL_DRUMS: set[DrumNote] = {*HAND_DRUMS, "kick"}
 BACKBEAT_SLOTS = (4, 12)
 DEFAULT_KICK_SLOTS = (0, 8)
+MAX_KICKS_PER_MEASURE = 4
 
 
 @dataclass(frozen=True)
@@ -30,7 +33,7 @@ DRUM_MAP: dict[DrumNote, DrumMapping] = {
     "ride": DrumMapping(51, "f/5", 1, "x", 2),
     "crash": DrumMapping(49, "a/5", 1, "x", 3),
     "snare": DrumMapping(38, "c/5", 1, "normal", 4),
-    "tom": DrumMapping(45, "e/5", 2, "normal", 5),
+    "tom": DrumMapping(45, "e/5", 1, "normal", 5),
     "kick": DrumMapping(36, "f/4", 2, "normal", 6),
 }
 
@@ -39,7 +42,7 @@ def build_midi_tick_list(events: list[ScoreEvent], bpm: float) -> list[MidiTickE
     """Post-process raw transcription into readable standard drum notation ticks.
 
     The output is a 16th-note MIDI tick list. It intentionally removes sub-16th
-    jitter, separates hands/snare into voice 1 and kick/floor tom into voice 2,
+    jitter, separates hats/snare/cymbals into voice 1 and kick into voice 2,
     and keeps one best event per drum per quantized slot.
     """
     events = _snap_near_simultaneous_events(events)
@@ -54,8 +57,12 @@ def build_midi_tick_list(events: list[ScoreEvent], bpm: float) -> list[MidiTickE
         if current is None or event.confidence > current.confidence:
             by_slot[slot_key] = event
 
+    by_slot = _drop_low_confidence_noise(by_slot)
+    by_slot = _strip_unplayable_drums(by_slot)
     optimized = _normalize_playable_rock_groove(by_slot)
+    optimized = _limit_kick_density(optimized)
     optimized = _limit_hand_polyphony(optimized)
+    optimized = _strip_unplayable_drums(optimized)
     tick_events: list[MidiTickEvent] = []
     for (tick, drum), event in sorted(optimized.items(), key=lambda item: (item[0][0], DRUM_MAP[item[0][1]].order)):
         mapping = DRUM_MAP[drum]
@@ -144,7 +151,7 @@ def _normalize_playable_rock_groove(
             continue
 
         representative = max((event for _, _, event in measure_events), key=lambda event: event.confidence)
-        groove_detected = any(drum in {"kick", "snare", "tom"} or drum in CYMBALS for _, drum, _ in measure_events)
+        groove_detected = any(drum in {"kick", "snare"} or drum in CYMBALS for _, drum, _ in measure_events)
         if not groove_detected:
             continue
 
@@ -221,14 +228,6 @@ def _force_consistent_hihat(
     fallback_event: ScoreEvent,
     measure_events: list[tuple[int, DrumNote, ScoreEvent]],
 ) -> None:
-    raw_cymbal_slots = {
-        (tick - base_tick) // SIXTEENTH_TICKS
-        for tick, drum, _ in measure_events
-        if drum in CYMBALS
-    }
-    raw_odd_cymbals = sum(1 for slot in raw_cymbal_slots if slot % 2 == 1)
-    every_slot = 1 if len(raw_cymbal_slots) >= 10 and raw_odd_cymbals >= 4 else 2
-
     snare_slots = {
         (tick - base_tick) // SIXTEENTH_TICKS
         for (tick, drum) in result
@@ -244,7 +243,7 @@ def _force_consistent_hihat(
         if drum in CYMBALS and base_tick <= tick < base_tick + MEASURE_TICKS:
             del result[(tick, drum)]
 
-    target_slots = set(range(0, SLOTS_PER_MEASURE, every_slot))
+    target_slots = set(range(0, SLOTS_PER_MEASURE, 2))
     target_slots.update(snare_slots)
     for slot in sorted(target_slots):
         drum: DrumNote = "hihat_open" if slot in open_slots else "hihat_closed"
@@ -283,6 +282,72 @@ def _snap_near_simultaneous_events(events: list[ScoreEvent]) -> list[ScoreEvent]
     return snapped
 
 
+def _drop_low_confidence_noise(
+    by_slot: dict[tuple[int, DrumNote], ScoreEvent],
+) -> dict[tuple[int, DrumNote], ScoreEvent]:
+    if not by_slot:
+        return {}
+
+    max_confidence = max(event.confidence for event in by_slot.values())
+    threshold = max_confidence * VELOCITY_FLOOR_RATIO
+    return {
+        key: event
+        for key, event in by_slot.items()
+        if event.confidence >= threshold
+    }
+
+
+def _strip_unplayable_drums(
+    by_slot: dict[tuple[int, DrumNote], ScoreEvent],
+) -> dict[tuple[int, DrumNote], ScoreEvent]:
+    return {
+        (tick, drum): event
+        for (tick, drum), event in by_slot.items()
+        if drum in FINAL_DRUMS
+    }
+
+
+def _limit_kick_density(
+    by_slot: dict[tuple[int, DrumNote], ScoreEvent],
+) -> dict[tuple[int, DrumNote], ScoreEvent]:
+    result = dict(by_slot)
+    measures = sorted({tick // MEASURE_TICKS for tick, drum in result if drum == "kick"})
+    slot_priority = {
+        0: 0,
+        8: 1,
+        6: 2,
+        10: 3,
+        2: 4,
+        14: 5,
+        4: 6,
+        12: 7,
+    }
+
+    for measure in measures:
+        base_tick = measure * MEASURE_TICKS
+        kicks = [
+            (tick, event)
+            for (tick, drum), event in result.items()
+            if drum == "kick" and base_tick <= tick < base_tick + MEASURE_TICKS
+        ]
+        if len(kicks) <= MAX_KICKS_PER_MEASURE:
+            continue
+
+        ranked = sorted(
+            kicks,
+            key=lambda item: (
+                slot_priority.get((item[0] - base_tick) // SIXTEENTH_TICKS, 99),
+                -item[1].confidence,
+            ),
+        )
+        keep_ticks = {tick for tick, _ in ranked[:MAX_KICKS_PER_MEASURE]}
+        for tick, _ in kicks:
+            if tick not in keep_ticks:
+                del result[(tick, "kick")]
+
+    return result
+
+
 def _limit_hand_polyphony(
     by_slot: dict[tuple[int, DrumNote], ScoreEvent],
 ) -> dict[tuple[int, DrumNote], ScoreEvent]:
@@ -294,7 +359,6 @@ def _limit_hand_polyphony(
         "ride": 3,
         "crash": 4,
         "kick": 9,
-        "tom": 9,
     }
 
     ticks = sorted({tick for tick, _ in result})
@@ -318,7 +382,11 @@ def _limit_hand_polyphony(
 def _articulation_for(drum: DrumNote, confidence: float) -> str:
     if drum == "hihat_open":
         return "open"
-    if drum in {"crash", "ride"} and confidence >= 0.82:
+    if drum == "hihat_closed":
+        return "closed"
+    if drum == "snare" and confidence < 0.5:
+        return "ghost"
+    if drum in {"crash", "ride"}:
         return "accent"
     return "none"
 
