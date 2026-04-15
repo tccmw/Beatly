@@ -1,5 +1,6 @@
 services:
   api:
+    image: beatly-api-local:latest
     build:
       context: ./apps/api
     environment:
@@ -14,6 +15,7 @@ services:
       - beatly-data:/tmp/beatly
 
   web:
+    image: beatly-web-local:latest
     build:
       context: .
       dockerfile: ./apps/web/Dockerfile
