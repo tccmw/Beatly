@@ -8,7 +8,7 @@ TICKS_PER_QUARTER = 480
 SIXTEENTH_TICKS = TICKS_PER_QUARTER // 4
 MEASURE_TICKS = TICKS_PER_QUARTER * 4
 SLOTS_PER_MEASURE = 16
-CLUSTER_WINDOW_SECONDS = 0.03
+CLUSTER_WINDOW_SECONDS = 0.02
 VELOCITY_FLOOR_RATIO = 0.3
 CYMBALS: set[DrumNote] = {"hihat_closed", "hihat_open", "ride", "crash"}
 HAND_DRUMS: set[DrumNote] = {*CYMBALS, "snare"}
@@ -61,6 +61,7 @@ def build_midi_tick_list(events: list[ScoreEvent], bpm: float) -> list[MidiTickE
     by_slot = _strip_unplayable_drums(by_slot)
     optimized = _normalize_playable_rock_groove(by_slot)
     optimized = _limit_kick_density(optimized)
+    optimized = _dedupe_cymbals_per_slot(optimized)
     optimized = _limit_hand_polyphony(optimized)
     optimized = _strip_unplayable_drums(optimized)
     tick_events: list[MidiTickEvent] = []
@@ -130,7 +131,7 @@ def build_engraved_measures(midi_ticks: list[MidiTickEvent]) -> list[EngravedMea
                 voice2=_engrave_voice(slots, 2),
             )
         )
-    return measures
+    return _sanitize_engraved_measures(measures)
 
 
 def _normalize_playable_rock_groove(
@@ -348,6 +349,37 @@ def _limit_kick_density(
     return result
 
 
+def _dedupe_cymbals_per_slot(
+    by_slot: dict[tuple[int, DrumNote], ScoreEvent],
+) -> dict[tuple[int, DrumNote], ScoreEvent]:
+    result = dict(by_slot)
+    cymbal_priority: dict[DrumNote, int] = {
+        "hihat_closed": 0,
+        "hihat_open": 1,
+        "ride": 2,
+        "crash": 3,
+        "snare": 9,
+        "kick": 9,
+        "tom": 9,
+    }
+
+    for tick in sorted({tick for tick, _ in result}):
+        cymbals = [
+            (drum, event)
+            for (event_tick, drum), event in result.items()
+            if event_tick == tick and drum in CYMBALS
+        ]
+        if len(cymbals) <= 1:
+            continue
+
+        keep_drum, _ = sorted(cymbals, key=lambda item: (cymbal_priority[item[0]], -item[1].confidence))[0]
+        for drum, _ in cymbals:
+            if drum != keep_drum:
+                del result[(tick, drum)]
+
+    return result
+
+
 def _limit_hand_polyphony(
     by_slot: dict[tuple[int, DrumNote], ScoreEvent],
 ) -> dict[tuple[int, DrumNote], ScoreEvent]:
@@ -468,3 +500,91 @@ def _dedupe_engraved_events(events: list[EngravedEvent]) -> list[EngravedEvent]:
         if current is None or event.confidence > current.confidence:
             by_drum[event.drum] = event
     return sorted(by_drum.values(), key=lambda event: DRUM_MAP[event.drum].order)
+
+
+def _sanitize_engraved_measures(measures: list[EngravedMeasure]) -> list[EngravedMeasure]:
+    sanitized: list[EngravedMeasure] = []
+    for measure in measures:
+        voice1 = _sanitize_voice_ticks(measure.voice1, 1)
+        voice2 = _sanitize_voice_ticks(measure.voice2, 2)
+        sanitized.append(EngravedMeasure(measure=measure.measure, voice1=voice1, voice2=voice2))
+    return sanitized
+
+
+def _sanitize_voice_ticks(ticks: list[EngravedTick], voice: int) -> list[EngravedTick]:
+    cleaned: list[EngravedTick] = []
+    for tick in ticks:
+        duration = tick.duration if tick.duration in {"q", "8", "16"} else "16"
+        slot = min(SLOTS_PER_MEASURE - 1, max(0, tick.slot))
+        events = _sanitize_tick_events(tick.events, voice)
+        cleaned.append(
+            EngravedTick(
+                slot=slot,
+                duration=duration,
+                duration_ticks=_duration_ticks(duration),
+                rest=tick.rest or not events,
+                voice=1 if voice == 1 else 2,
+                events=events,
+                lyric=tick.lyric,
+            )
+        )
+
+    return _rebalance_voice_to_4_4(cleaned, voice)
+
+
+def _sanitize_tick_events(events: list[EngravedEvent], voice: int) -> list[EngravedEvent]:
+    allowed = HAND_DRUMS if voice == 1 else {"kick"}
+    playable = [event for event in _dedupe_engraved_events(events) if event.drum in allowed]
+
+    if voice == 1:
+        cymbals = [event for event in playable if event.drum in CYMBALS]
+        non_cymbals = [event for event in playable if event.drum not in CYMBALS]
+        if len(cymbals) > 1:
+            cymbals = sorted(cymbals, key=lambda event: (DRUM_MAP[event.drum].order, -event.confidence))[:1]
+        playable = sorted([*non_cymbals, *cymbals], key=lambda event: DRUM_MAP[event.drum].order)[:2]
+
+    if voice == 2:
+        playable = playable[:1]
+
+    return playable
+
+
+def _rebalance_voice_to_4_4(ticks: list[EngravedTick], voice: int) -> list[EngravedTick]:
+    balanced: list[EngravedTick] = []
+    for beat_start in range(0, SLOTS_PER_MEASURE, 4):
+        beat_ticks = [
+            tick
+            for tick in ticks
+            if beat_start <= tick.slot < beat_start + 4
+        ]
+        occupied = [tick for tick in beat_ticks if not tick.rest and tick.events]
+
+        if not occupied:
+            balanced.append(_engraved_rest(beat_start, "q", voice))
+            continue
+
+        if len(occupied) == 1 and occupied[0].slot == beat_start:
+            balanced.append(_engraved_note(beat_start, "q", voice, occupied[0].events))
+            continue
+
+        if all(tick.slot % 2 == 0 for tick in occupied):
+            by_slot = {tick.slot: tick for tick in occupied}
+            for slot in (beat_start, beat_start + 2):
+                tick = by_slot.get(slot)
+                balanced.append(
+                    _engraved_note(slot, "8", voice, tick.events)
+                    if tick
+                    else _engraved_rest(slot, "8", voice)
+                )
+            continue
+
+        by_slot = {tick.slot: tick for tick in occupied}
+        for slot in range(beat_start, beat_start + 4):
+            tick = by_slot.get(slot)
+            balanced.append(
+                _engraved_note(slot, "16", voice, tick.events)
+                if tick
+                else _engraved_rest(slot, "16", voice)
+            )
+
+    return balanced

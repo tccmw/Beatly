@@ -305,7 +305,12 @@ function drawHiHatStateMarks(
 
   const keys = uniqueKeys(tick.events);
   const ys = note.getYs();
+  const drawn = new Set<string>();
   for (const event of hatEvents) {
+    if (drawn.has(event.staff_key)) {
+      continue;
+    }
+
     const keyIndex = Math.max(0, keys.indexOf(event.staff_key));
     const y = ys[keyIndex] ?? ys[0] ?? 0;
     const mark = event.articulation === "open" ? "o" : "+";
@@ -313,6 +318,7 @@ function drawHiHatStateMarks(
     context.setFont("Arial", 11);
     context.fillText(mark, note.getAbsoluteX() - 4, y - 10);
     context.restore();
+    drawn.add(event.staff_key);
   }
 }
 
