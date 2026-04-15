@@ -65,6 +65,24 @@ Then open:
 }
 ```
 
+## Project Harness
+
+The project contract lives in `harness/PROJECT_HARNESS.md`. It captures the
+ultimate goal, notation rules, hard constraints, and technical pipeline for
+producing drummer-ready sheets with synchronized lyrics.
+
+Run the executable quality harness from the repository root:
+
+```powershell
+py -3 harness\beatly_quality_harness.py
+# or, if Python is installed as `python`:
+python harness\beatly_quality_harness.py
+```
+
+The harness checks PAS drum mapping, voice separation, 16th-note quantization,
+lyric-slot preservation, playable hand/bass constraints, and Whisper model
+caching expectations.
+
 ## Notes
 
 The backend contains the production hooks for Demucs and Whisper, but those
