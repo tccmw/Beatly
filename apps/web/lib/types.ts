@@ -20,8 +20,25 @@ export type LyricWord = {
   end: number;
 };
 
+export type MidiTickEvent = {
+  tick: number;
+  duration_ticks: number;
+  measure: number;
+  slot: number;
+  voice: 1 | 2;
+  midi_note: number;
+  drum: DrumNote;
+  staff_key: string;
+  notehead: "normal" | "x";
+  articulation: "accent" | "open" | "none";
+  lyric?: string | null;
+  confidence: number;
+};
+
 export type AnalysisResult = {
   bpm: number;
   events: ScoreEvent[];
   words: LyricWord[];
+  ticks_per_quarter: number;
+  midi_ticks: MidiTickEvent[];
 };

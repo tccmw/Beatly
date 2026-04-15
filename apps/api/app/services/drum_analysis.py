@@ -49,20 +49,20 @@ def detect_drum_events(audio_path: Path) -> list[DrumEvent]:
         if segment.size < 32:
             continue
 
-        note, confidence = _classify_hit(segment, sr)
         energy_confidence = min(1.0, float(rms[min(frame, len(rms) - 1)] * 18))
-        events.append(
-            DrumEvent(
-                time=round(float(time), 3),
-                note=note,
-                confidence=round(max(confidence, energy_confidence), 3),
+        for note, confidence in _classify_hits(segment, sr):
+            events.append(
+                DrumEvent(
+                    time=round(float(time), 3),
+                    note=note,
+                    confidence=round(max(confidence, energy_confidence), 3),
+                )
             )
-        )
 
     return _dedupe_events(events)
 
 
-def _classify_hit(segment: np.ndarray, sr: int) -> tuple[DrumNote, float]:
+def _classify_hits(segment: np.ndarray, sr: int) -> list[tuple[DrumNote, float]]:
     centroid = float(librosa.feature.spectral_centroid(y=segment, sr=sr)[0].mean())
     bandwidth = float(librosa.feature.spectral_bandwidth(y=segment, sr=sr)[0].mean())
     zcr = float(librosa.feature.zero_crossing_rate(segment)[0].mean())
@@ -78,17 +78,35 @@ def _classify_hit(segment: np.ndarray, sr: int) -> tuple[DrumNote, float]:
     mid_ratio = mid / total
     high_ratio = high / total
 
+    hits: list[tuple[DrumNote, float]] = []
+
+    if low_ratio > 0.32 and centroid < 1800:
+        hits.append(("kick", min(0.98, 0.58 + low_ratio)))
+
+    if mid_ratio > 0.3 and 900 <= centroid <= 4200:
+        hits.append(("snare", min(0.92, 0.5 + mid_ratio)))
+
+    if high_ratio > 0.33 and zcr > 0.055:
+        cymbal_confidence = min(0.95, 0.48 + high_ratio)
+        if bandwidth > 4400 or centroid > 6800:
+            hits.append(("crash", cymbal_confidence))
+        else:
+            hits.append(("hihat_closed", cymbal_confidence))
+
+    if hits:
+        return _limit_polyphony(hits)
+
     if low_ratio > 0.52 and centroid < 900:
-        return "kick", min(0.98, 0.62 + low_ratio)
+        return [("kick", min(0.98, 0.62 + low_ratio))]
     if high_ratio > 0.5 and zcr > 0.08:
         if bandwidth > 4200 or centroid > 6500:
-            return "crash", min(0.95, 0.48 + high_ratio)
-        return "hihat_closed", min(0.94, 0.5 + high_ratio)
+            return [("crash", min(0.95, 0.48 + high_ratio))]
+        return [("hihat_closed", min(0.94, 0.5 + high_ratio))]
     if mid_ratio > 0.36 and centroid < 3200:
-        return "snare", min(0.92, 0.5 + mid_ratio)
+        return [("snare", min(0.92, 0.5 + mid_ratio))]
     if low_ratio > 0.28 and mid_ratio > 0.28:
-        return "tom", 0.72
-    return "ride", 0.58
+        return [("tom", 0.72)]
+    return [("ride", 0.58)]
 
 
 def _band_energy(spectrum: np.ndarray, freqs: np.ndarray, low: float, high: float) -> float:
@@ -100,6 +118,7 @@ def _dedupe_events(events: list[DrumEvent]) -> list[DrumEvent]:
     if not events:
         return []
 
+    events = sorted(events, key=lambda event: (event.time, event.note))
     result = [events[0]]
     for event in events[1:]:
         previous = result[-1]
@@ -109,3 +128,20 @@ def _dedupe_events(events: list[DrumEvent]) -> list[DrumEvent]:
             continue
         result.append(event)
     return result
+
+
+def _limit_polyphony(hits: list[tuple[DrumNote, float]]) -> list[tuple[DrumNote, float]]:
+    priority: dict[DrumNote, int] = {
+        "kick": 0,
+        "snare": 1,
+        "hihat_closed": 2,
+        "hihat_open": 2,
+        "ride": 2,
+        "crash": 2,
+        "tom": 3,
+    }
+    unique: dict[DrumNote, float] = {}
+    for note, confidence in hits:
+        unique[note] = max(unique.get(note, 0), confidence)
+    ordered = sorted(unique.items(), key=lambda item: (priority[item[0]], -item[1]))
+    return ordered[:3]

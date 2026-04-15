@@ -33,6 +33,23 @@ Then open:
   ],
   "words": [
     { "word": "Hello", "start": 0.48, "end": 0.8 }
+  ],
+  "ticks_per_quarter": 480,
+  "midi_ticks": [
+    {
+      "tick": 480,
+      "duration_ticks": 120,
+      "measure": 1,
+      "slot": 4,
+      "voice": 2,
+      "midi_note": 36,
+      "drum": "kick",
+      "staff_key": "f/4",
+      "notehead": "normal",
+      "articulation": "none",
+      "lyric": "Hello",
+      "confidence": 0.82
+    }
   ]
 }
 ```
