@@ -23,6 +23,12 @@ const NOTE_MAP: Record<DrumNote, { key: string; stem: "up" | "down"; symbol?: "x
   kick: { key: "f/4", stem: "down", label: "Kick" },
 };
 
+const MEASURES_PER_LINE = 4;
+const MEASURE_WIDTH = 245;
+const LEFT_MARGIN = 24;
+const TOP_MARGIN = 24;
+const LINE_HEIGHT = 205;
+
 export function DrumSheet({ score }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const measures = useMemo(() => toMeasures(score), [score]);
@@ -34,19 +40,19 @@ export function DrumSheet({ score }: Props) {
     }
 
     container.innerHTML = "";
-    const width = Math.max(920, measures.length * 290 + 60);
-    const height = Math.max(260, Math.ceil(measures.length / 3) * 210);
+    const width = LEFT_MARGIN * 2 + MEASURES_PER_LINE * MEASURE_WIDTH;
+    const height = Math.max(260, Math.ceil(measures.length / MEASURES_PER_LINE) * LINE_HEIGHT + TOP_MARGIN);
     const renderer = new Renderer(container, Renderer.Backends.SVG);
     renderer.resize(width, height);
     const context = renderer.getContext();
     context.setFont("Arial", 12);
 
     measures.forEach((measure, index) => {
-      const column = index % 3;
-      const row = Math.floor(index / 3);
-      const x = 24 + column * 290;
-      const y = 24 + row * 205;
-      const staveWidth = 270;
+      const column = index % MEASURES_PER_LINE;
+      const row = Math.floor(index / MEASURES_PER_LINE);
+      const x = LEFT_MARGIN + column * MEASURE_WIDTH;
+      const y = TOP_MARGIN + row * LINE_HEIGHT;
+      const staveWidth = MEASURE_WIDTH;
 
       const stave = new Stave(x, y, staveWidth);
       if (index === 0) {
