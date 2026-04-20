@@ -7,6 +7,7 @@ services:
       BEATLY_UPLOAD_DIR: /tmp/beatly/uploads
       BEATLY_SEPARATED_DIR: /tmp/beatly/separated
       BEATLY_ANALYSIS_CACHE_DIR: /tmp/beatly/analysis-cache
+      BEATLY_YOUTUBE_DIR: /tmp/beatly/youtube
       BEATLY_USE_STUBS: "false"
       BEATLY_ENABLE_LYRICS: "true"
       BEATLY_FORCE_VOCALS_FOR_LYRICS: "true"

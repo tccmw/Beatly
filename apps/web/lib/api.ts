@@ -1,6 +1,8 @@
 import type { AnalysisJobStatus, AnalysisResult } from "./types";
 
 const ANALYZE_JOBS_URL = process.env.NEXT_PUBLIC_ANALYZE_JOBS_URL ?? "/api/analyze/jobs";
+const ANALYZE_YOUTUBE_JOBS_URL =
+  process.env.NEXT_PUBLIC_ANALYZE_YOUTUBE_JOBS_URL ?? "/api/analyze/youtube/jobs";
 const POLL_INTERVAL_MS = 2000;
 const MAX_JOB_WAIT_MS = 60 * 60 * 1000;
 
@@ -22,6 +24,26 @@ export async function analyzeAudio(file: File, options: AnalyzeOptions = {}): Pr
   });
 
   await throwIfNotOk(response, "Could not start analysis.");
+
+  const job = (await response.json()) as AnalysisJobStatus;
+  options.onStatus?.(job);
+
+  return pollAnalysisJob(job.job_id, options);
+}
+
+export async function analyzeYouTube(youtubeUrl: string, options: AnalyzeOptions = {}): Promise<AnalysisResult> {
+  const formData = new FormData();
+  formData.append("youtube_url", youtubeUrl);
+  if (options.enableLyrics !== undefined) {
+    formData.append("enable_lyrics", String(options.enableLyrics));
+  }
+
+  const response = await fetch(ANALYZE_YOUTUBE_JOBS_URL, {
+    method: "POST",
+    body: formData,
+  });
+
+  await throwIfNotOk(response, "Could not start YouTube analysis.");
 
   const job = (await response.json()) as AnalysisJobStatus;
   options.onStatus?.(job);

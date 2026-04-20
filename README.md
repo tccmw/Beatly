@@ -5,10 +5,11 @@ with synchronized lyrics.
 
 ## Apps
 
-- `apps/api`: FastAPI backend. Separates drums with Demucs, analyzes drum hits
-  with librosa, transcribes lyrics with Whisper, and returns a merged JSON score.
-- `apps/web`: Next.js frontend. Uploads MP3 files and renders drum notation with
-  VexFlow plus beat-aligned lyrics.
+- `apps/api`: FastAPI backend. Accepts MP3 uploads or YouTube links, separates
+  drums with Demucs, analyzes drum hits with librosa, prefers YouTube captions
+  when available, falls back to Whisper, and returns a merged JSON score.
+- `apps/web`: Next.js frontend. Submits MP3 files or YouTube links and renders
+  drum notation with VexFlow plus beat-aligned lyrics.
 
 ## Quick Start
 
@@ -24,6 +25,11 @@ Then open:
 ## API Shape
 
 `POST /analyze` accepts `multipart/form-data` with a `file` field and returns:
+
+`POST /analyze/youtube/jobs` accepts `multipart/form-data` with `youtube_url`.
+The job result has the same `AnalysisResult` shape as MP3 analysis. Korean
+YouTube captions are used first when present; if captions are missing, the
+downloaded audio follows the existing Demucs -> vocals -> Whisper path.
 
 ```json
 {

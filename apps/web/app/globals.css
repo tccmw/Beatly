@@ -68,6 +68,33 @@ input {
   border-radius: 8px;
 }
 
+.source-toggle {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.source-button {
+  min-height: 38px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  background: #fff;
+  cursor: pointer;
+}
+
+.source-button.active {
+  border-color: var(--accent);
+  color: #fff;
+  background: var(--accent);
+}
+
+.source-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
 .controls {
   display: flex;
   flex-wrap: wrap;
@@ -84,6 +111,16 @@ input {
 }
 
 .file-input {
+  min-width: 260px;
+  max-width: 100%;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.text-input {
+  flex: 1 1 420px;
   min-width: 260px;
   max-width: 100%;
   padding: 10px;
@@ -166,6 +203,7 @@ input {
   }
 
   .file-input,
+  .text-input,
   .button {
     width: 100%;
   }

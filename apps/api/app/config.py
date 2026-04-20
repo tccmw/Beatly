@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     upload_dir: Path = Field(default=Path("uploads"), alias="BEATLY_UPLOAD_DIR")
     separated_dir: Path = Field(default=Path("separated"), alias="BEATLY_SEPARATED_DIR")
     analysis_cache_dir: Path = Field(default=Path("analysis-cache"), alias="BEATLY_ANALYSIS_CACHE_DIR")
+    youtube_dir: Path = Field(default=Path("youtube"), alias="BEATLY_YOUTUBE_DIR")
     whisper_model: str = Field(default="large-v3-turbo", alias="WHISPER_MODEL")
     whisper_engine: str = Field(default="faster-whisper", alias="WHISPER_ENGINE")
     whisper_device: str = Field(default="cpu", alias="WHISPER_DEVICE")
@@ -34,6 +35,7 @@ def get_settings() -> Settings:
     settings.upload_dir.mkdir(parents=True, exist_ok=True)
     settings.separated_dir.mkdir(parents=True, exist_ok=True)
     settings.analysis_cache_dir.mkdir(parents=True, exist_ok=True)
+    settings.youtube_dir.mkdir(parents=True, exist_ok=True)
     if settings.whisper_download_root is not None:
         settings.whisper_download_root.mkdir(parents=True, exist_ok=True)
     return settings
