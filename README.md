@@ -87,14 +87,18 @@ caching expectations.
 
 The backend contains the production hooks for Demucs and Whisper, but those
 models are large. Korean lyric extraction defaults to Demucs stem separation
-and Whisper `large-v3-turbo` to avoid the very slow CPU runtime of full
-`large-v3` while keeping stronger Korean transcription than `tiny`/`base`.
+and `faster-whisper` with Whisper `large-v3-turbo` on CPU `int8` to avoid the
+very slow CPU runtime of full `large-v3` while keeping stronger Korean
+transcription than `tiny`/`base`.
 Set `WHISPER_MODEL=small` or `WHISPER_MODEL=medium` for faster local tests, and
 use `WHISPER_MODEL=large-v3` only when maximum lyric accuracy is worth the
 extra runtime. Set `BEATLY_USE_STUBS=true` for fast development without model
 downloads. Docker defaults to real processing. Whisper is loaded and cached on
 the first lyric request; set `BEATLY_PRELOAD_WHISPER=true` to load it during API
-startup instead.
+startup instead. Exact repeat uploads with the same analysis settings are also
+cached under `BEATLY_ANALYSIS_CACHE_DIR`. The slow `openai-whisper` fallback is
+disabled by default; set `WHISPER_OPENAI_FALLBACK=true` only when you prefer a
+slow fallback over a fast failure if `faster-whisper` cannot load.
 
 For local frontend-only development:
 

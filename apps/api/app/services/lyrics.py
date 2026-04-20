@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import unicodedata
+import logging
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 from app.models import LyricWord
 
+logger = logging.getLogger("uvicorn.error")
 MIN_LYRIC_DURATION_SECONDS = 0.1
 MAX_UNSPLIT_KOREAN_SYLLABLES = 2
 KOREAN_TRANSCRIPTION_PROMPT = (
@@ -15,14 +17,30 @@ KOREAN_TRANSCRIPTION_PROMPT = (
 )
 
 
-def preload_whisper_model(model_name: str = "large-v3-turbo") -> None:
+def preload_whisper_model(
+    model_name: str = "large-v3-turbo",
+    engine: str = "faster-whisper",
+    device: str = "cpu",
+    compute_type: str = "int8",
+    download_root: Path | None = None,
+) -> None:
     """Warm the cached Whisper model during FastAPI startup."""
+    if _is_faster_whisper_engine(engine):
+        _load_faster_whisper_model(model_name, device, compute_type, str(download_root) if download_root else None)
+        return
     _load_whisper_model(model_name)
 
 
 def transcribe_words_with_whisper(
     audio_path: Path,
     model_name: str = "large-v3-turbo",
+    engine: str = "faster-whisper",
+    device: str = "cpu",
+    compute_type: str = "int8",
+    beam_size: int = 1,
+    vad_filter: bool = False,
+    download_root: Path | None = None,
+    allow_openai_fallback: bool = False,
     use_stub: bool = False,
     language: str = "ko",
     word_timestamps: bool = True,
@@ -35,12 +53,111 @@ def transcribe_words_with_whisper(
             LyricWord(word="\ud2c0", start=1.28, end=1.4),
         ]
 
+    if _is_faster_whisper_engine(engine):
+        try:
+            return _transcribe_words_with_faster_whisper(
+                audio_path,
+                model_name=model_name,
+                device=device,
+                compute_type=compute_type,
+                beam_size=beam_size,
+                vad_filter=vad_filter,
+                download_root=download_root,
+                language=language,
+                word_timestamps=word_timestamps,
+            )
+        except Exception as exc:
+            if not allow_openai_fallback:
+                raise RuntimeError(
+                    "faster-whisper transcription failed before transcription could run. "
+                    "The model may not be downloaded yet or the Hugging Face download failed. "
+                    "Retry after the model is cached, or set WHISPER_OPENAI_FALLBACK=true to allow the slower fallback."
+                ) from exc
+            logger.exception("faster-whisper transcription failed; falling back to openai-whisper")
+
+    return _transcribe_words_with_openai_whisper(
+        audio_path,
+        model_name=model_name,
+        beam_size=beam_size,
+        language=language,
+        word_timestamps=word_timestamps,
+    )
+
+
+def _transcribe_words_with_faster_whisper(
+    audio_path: Path,
+    model_name: str,
+    device: str,
+    compute_type: str,
+    beam_size: int,
+    vad_filter: bool,
+    download_root: Path | None,
+    language: str,
+    word_timestamps: bool,
+) -> list[LyricWord]:
+    model = _load_faster_whisper_model(model_name, device, compute_type, str(download_root) if download_root else None)
+    segments, _ = model.transcribe(
+        str(audio_path),
+        language=language,
+        task="transcribe",
+        word_timestamps=word_timestamps,
+        beam_size=max(1, beam_size),
+        best_of=1,
+        temperature=0.0,
+        condition_on_previous_text=False,
+        initial_prompt=KOREAN_TRANSCRIPTION_PROMPT if language == "ko" else None,
+        vad_filter=vad_filter,
+    )
+
+    words: list[LyricWord] = []
+    for segment in segments:
+        segment_words = getattr(segment, "words", None) if word_timestamps else None
+        if not segment_words:
+            words.extend(
+                _words_from_segment_text(
+                    {
+                        "text": getattr(segment, "text", ""),
+                        "start": getattr(segment, "start", 0),
+                        "end": getattr(segment, "end", MIN_LYRIC_DURATION_SECONDS),
+                    }
+                )
+            )
+            continue
+        segment_output = _words_from_timestamp_items(
+            segment_words,
+            segment_start=float(getattr(segment, "start", 0)),
+            segment_end=float(getattr(segment, "end", MIN_LYRIC_DURATION_SECONDS)),
+        )
+        if segment_output:
+            words.extend(segment_output)
+        else:
+            words.extend(
+                _words_from_segment_text(
+                    {
+                        "text": getattr(segment, "text", ""),
+                        "start": getattr(segment, "start", 0),
+                        "end": getattr(segment, "end", MIN_LYRIC_DURATION_SECONDS),
+                    }
+                )
+            )
+    return _sanitize_word_timeline(words)
+
+
+def _transcribe_words_with_openai_whisper(
+    audio_path: Path,
+    model_name: str,
+    beam_size: int,
+    language: str,
+    word_timestamps: bool,
+) -> list[LyricWord]:
     model = _load_whisper_model(model_name)
     result: dict[str, Any] = model.transcribe(
         str(audio_path),
         language=language,
         task="transcribe",
         word_timestamps=word_timestamps,
+        beam_size=max(1, beam_size),
+        best_of=1,
         fp16=False,
         temperature=0.0,
         condition_on_previous_text=False,
@@ -55,22 +172,27 @@ def transcribe_words_with_whisper(
             words.extend(_words_from_segment_text(segment))
             continue
 
-        segment_output: list[LyricWord] = []
-        for item in segment.get("words", []):
-            word = _normalize_lyric(str(item.get("word", "")))
-            if not word:
-                continue
-            start = float(item.get("start", segment.get("start", 0)))
-            end = max(
-                start + MIN_LYRIC_DURATION_SECONDS,
-                float(item.get("end", segment.get("end", start + MIN_LYRIC_DURATION_SECONDS))),
-            )
-            segment_output.extend(_split_korean_word_if_needed(word, start, end))
+        segment_output = _words_from_timestamp_items(
+            segment.get("words", []),
+            segment_start=float(segment.get("start", 0)),
+            segment_end=float(segment.get("end", MIN_LYRIC_DURATION_SECONDS)),
+        )
         if segment_output:
             words.extend(segment_output)
         else:
             words.extend(_words_from_segment_text(segment))
     return _sanitize_word_timeline(words)
+
+
+def _is_faster_whisper_engine(engine: str) -> bool:
+    return engine.strip().lower() in {"faster-whisper", "faster_whisper", "ctranslate2", "ct2"}
+
+
+@lru_cache(maxsize=2)
+def _load_faster_whisper_model(model_name: str, device: str, compute_type: str, download_root: str | None):
+    from faster_whisper import WhisperModel
+
+    return WhisperModel(model_name, device=device, compute_type=compute_type, download_root=download_root)
 
 
 @lru_cache(maxsize=2)
@@ -119,6 +241,31 @@ def _expand_lyric_units(text: str) -> list[str]:
 
 def _strip_token(token: str) -> str:
     return _normalize_lyric(token.strip(".,!?;:\"'()[]{}<>"))
+
+
+def _words_from_timestamp_items(
+    items: list[Any],
+    segment_start: float,
+    segment_end: float,
+) -> list[LyricWord]:
+    words: list[LyricWord] = []
+    for item in items:
+        word = _normalize_lyric(str(_timestamp_item_value(item, "word", "")))
+        if not word:
+            continue
+        start = float(_timestamp_item_value(item, "start", segment_start))
+        end = max(
+            start + MIN_LYRIC_DURATION_SECONDS,
+            float(_timestamp_item_value(item, "end", max(segment_end, start + MIN_LYRIC_DURATION_SECONDS))),
+        )
+        words.extend(_split_korean_word_if_needed(word, start, end))
+    return words
+
+
+def _timestamp_item_value(item: Any, key: str, default: Any) -> Any:
+    if isinstance(item, dict):
+        return item.get(key, default)
+    return getattr(item, key, default)
 
 
 def _split_korean_word_if_needed(word: str, start: float, end: float) -> list[LyricWord]:
