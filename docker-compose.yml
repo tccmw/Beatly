@@ -7,10 +7,10 @@ services:
       BEATLY_UPLOAD_DIR: /tmp/beatly/uploads
       BEATLY_SEPARATED_DIR: /tmp/beatly/separated
       BEATLY_USE_STUBS: "false"
-      BEATLY_ENABLE_LYRICS: "false"
-      BEATLY_FORCE_VOCALS_FOR_LYRICS: "false"
-      WHISPER_MODEL: tiny
-      DEMUCS_MODE: none
+      BEATLY_ENABLE_LYRICS: "true"
+      BEATLY_FORCE_VOCALS_FOR_LYRICS: "true"
+      WHISPER_MODEL: large-v3-turbo
+      DEMUCS_MODE: full
       DEMUCS_JOBS: 0
     ports:
       - "8000:8000"

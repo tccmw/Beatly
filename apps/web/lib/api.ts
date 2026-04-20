@@ -12,7 +12,9 @@ export type AnalyzeOptions = {
 export async function analyzeAudio(file: File, options: AnalyzeOptions = {}): Promise<AnalysisResult> {
   const formData = new FormData();
   formData.append("file", file);
-  formData.append("enable_lyrics", String(Boolean(options.enableLyrics)));
+  if (options.enableLyrics !== undefined) {
+    formData.append("enable_lyrics", String(options.enableLyrics));
+  }
 
   const response = await fetch(ANALYZE_JOBS_URL, {
     method: "POST",

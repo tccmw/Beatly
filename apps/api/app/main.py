@@ -21,7 +21,8 @@ from app.services.notation import TICKS_PER_QUARTER, build_engraved_measures, bu
 from app.services.score_merge import build_lyric_lane, merge_drums_and_lyrics
 
 logger = logging.getLogger("uvicorn.error")
-KOREAN_WHISPER_MODELS = {"tiny", "base", "small", "medium", "large-v3"}
+KOREAN_WHISPER_MODEL_FALLBACK = "large-v3-turbo"
+KOREAN_WHISPER_MODELS = {"small", "medium", "large", "large-v2", "large-v3", "large-v3-turbo", "turbo"}
 _jobs: dict[str, AnalysisJobStatus] = {}
 _jobs_lock = Lock()
 
@@ -29,7 +30,7 @@ _jobs_lock = Lock()
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     settings = get_settings()
-    if settings.enable_lyrics and not settings.use_stubs:
+    if settings.enable_lyrics and settings.preload_whisper and not settings.use_stubs:
         preload_whisper_model(_korean_whisper_model(settings.whisper_model))
     yield
 
@@ -262,8 +263,10 @@ def _measure_count_from_words(words: list[LyricWord], bpm: float) -> int:
 
 def _demucs_mode_for_request(configured_mode: str, enable_lyrics: bool, force_vocals_for_lyrics: bool) -> str:
     mode = configured_mode.lower().strip()
-    if enable_lyrics and force_vocals_for_lyrics and mode in {"none", "off", "skip"}:
-        return "vocals"
+    if enable_lyrics and mode in {"none", "off", "skip"}:
+        if force_vocals_for_lyrics:
+            return "vocals"
+        logger.warning("Lyrics are enabled while Demucs is disabled; Whisper will transcribe the original mix")
     return configured_mode
 
 
@@ -271,5 +274,9 @@ def _korean_whisper_model(configured_model: str) -> str:
     model = configured_model.strip()
     if model in KOREAN_WHISPER_MODELS:
         return model
-    logger.warning("WHISPER_MODEL=%s is not supported; using base", configured_model)
-    return "base"
+    logger.warning(
+        "WHISPER_MODEL=%s is too small or unsupported for Korean lyric extraction; using %s",
+        configured_model,
+        KOREAN_WHISPER_MODEL_FALLBACK,
+    )
+    return KOREAN_WHISPER_MODEL_FALLBACK

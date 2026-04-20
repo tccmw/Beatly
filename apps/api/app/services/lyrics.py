@@ -9,16 +9,20 @@ from app.models import LyricWord
 
 MIN_LYRIC_DURATION_SECONDS = 0.1
 MAX_UNSPLIT_KOREAN_SYLLABLES = 2
+KOREAN_TRANSCRIPTION_PROMPT = (
+    "Transcribe Korean song lyrics exactly in Hangul. "
+    "Do not translate. Keep Korean spacing natural and omit non-lyric noise labels."
+)
 
 
-def preload_whisper_model(model_name: str = "medium") -> None:
+def preload_whisper_model(model_name: str = "large-v3-turbo") -> None:
     """Warm the cached Whisper model during FastAPI startup."""
     _load_whisper_model(model_name)
 
 
 def transcribe_words_with_whisper(
     audio_path: Path,
-    model_name: str = "medium",
+    model_name: str = "large-v3-turbo",
     use_stub: bool = False,
     language: str = "ko",
     word_timestamps: bool = True,
@@ -40,15 +44,18 @@ def transcribe_words_with_whisper(
         fp16=False,
         temperature=0.0,
         condition_on_previous_text=False,
+        initial_prompt=KOREAN_TRANSCRIPTION_PROMPT if language == "ko" else None,
         verbose=False,
     )
 
     words: list[LyricWord] = []
     for segment in result.get("segments", []):
-        if not word_timestamps:
+        segment_words = segment.get("words", []) if word_timestamps else []
+        if not segment_words:
             words.extend(_words_from_segment_text(segment))
             continue
 
+        segment_output: list[LyricWord] = []
         for item in segment.get("words", []):
             word = _normalize_lyric(str(item.get("word", "")))
             if not word:
@@ -58,7 +65,11 @@ def transcribe_words_with_whisper(
                 start + MIN_LYRIC_DURATION_SECONDS,
                 float(item.get("end", segment.get("end", start + MIN_LYRIC_DURATION_SECONDS))),
             )
-            words.extend(_split_korean_word_if_needed(word, start, end))
+            segment_output.extend(_split_korean_word_if_needed(word, start, end))
+        if segment_output:
+            words.extend(segment_output)
+        else:
+            words.extend(_words_from_segment_text(segment))
     return _sanitize_word_timeline(words)
 
 

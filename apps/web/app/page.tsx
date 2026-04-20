@@ -9,7 +9,7 @@ export default function Home() {
   const [file, setFile] = useState<File | null>(null);
   const [score, setScore] = useState<AnalysisResult | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [enableLyrics, setEnableLyrics] = useState(false);
+  const [enableLyrics, setEnableLyrics] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [statusText, setStatusText] = useState<string | null>(null);
 
