@@ -9,21 +9,31 @@ export default function Home() {
   const [file, setFile] = useState<File | null>(null);
   const [score, setScore] = useState<AnalysisResult | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [enableLyrics, setEnableLyrics] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [statusText, setStatusText] = useState<string | null>(null);
 
   async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!file) {
-      setError("MP3 파일을 선택해 주세요.");
+      setError("Choose an MP3, WAV, M4A, or FLAC file.");
       return;
     }
 
     setIsLoading(true);
     setError(null);
+    setStatusText(null);
     try {
-      setScore(await analyzeAudio(file));
+      const result = await analyzeAudio(file, {
+        enableLyrics,
+        onStatus: (job) => {
+          setStatusText(formatJobStatus(job.status, job.detail));
+        },
+      });
+      setScore(result);
+      setStatusText(null);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "분석 중 오류가 발생했습니다.");
+      setError(caught instanceof Error ? caught.message : "Analysis failed.");
     } finally {
       setIsLoading(false);
     }
@@ -36,7 +46,7 @@ export default function Home() {
           <div>
             <h1 className="title">Beatly Drum Sheet</h1>
             <p className="subtitle">
-              MP3를 업로드하면 드럼 파트와 가사를 분석해 연주용 5선보와 박자별 가사 위치를 만듭니다.
+              Upload audio to separate vocals, transcribe Korean lyrics, and generate a synchronized drum score.
             </p>
           </div>
         </div>
@@ -50,9 +60,18 @@ export default function Home() {
               onChange={(event) => setFile(event.target.files?.[0] ?? null)}
             />
             <button className="button" disabled={isLoading} type="submit">
-              {isLoading ? "분석 중..." : "악보 생성"}
+              {isLoading ? "Analyzing..." : "Generate Score"}
             </button>
           </div>
+          <label className="option-row">
+            <input
+              checked={enableLyrics}
+              onChange={(event) => setEnableLyrics(event.target.checked)}
+              type="checkbox"
+            />
+            <span>Extract Korean lyrics with Whisper. Slower on CPU.</span>
+          </label>
+          {statusText ? <div className="status">{statusText}</div> : null}
           {error ? <div className="error">{error}</div> : null}
         </form>
 
@@ -66,9 +85,25 @@ export default function Home() {
             <DrumSheet score={score} />
           </>
         ) : (
-          <div className="empty">아직 생성된 악보가 없습니다.</div>
+          <div className="empty">No score generated yet.</div>
         )}
       </div>
     </main>
   );
+}
+
+function formatJobStatus(status: string, detail?: string | null): string {
+  if (status === "queued") {
+    return detail ?? "Queued for analysis.";
+  }
+  if (status === "running") {
+    return detail ?? "Analyzing audio. This can take several minutes when lyrics are enabled.";
+  }
+  if (status === "succeeded") {
+    return "Analysis finished.";
+  }
+  if (status === "failed") {
+    return detail ?? "Analysis failed.";
+  }
+  return detail ?? "Working.";
 }

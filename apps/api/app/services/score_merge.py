@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import unicodedata
+
 from app.models import DrumEvent, LyricSlot, LyricWord, ScoreEvent
 
 
@@ -28,20 +30,38 @@ def build_lyric_lane(words: list[LyricWord], bpm: float, measure_count: int) -> 
     beat_seconds = 60 / max(bpm, 1)
     measure_seconds = beat_seconds * 4
     slot_seconds = measure_seconds / 16
-    lane: dict[int, dict[int, list[str]]] = {measure: {} for measure in range(1, measure_count + 1)}
+    lane: dict[int, dict[int, str]] = {measure: {} for measure in range(1, measure_count + 1)}
+    occupied_slots: set[int] = set()
+    total_slots = max(16, measure_count * 16)
 
     for word in sorted(words, key=lambda item: item.start):
-        measure_index = int(word.start // measure_seconds)
-        if measure_index < 0 or measure_index >= measure_count:
+        text = unicodedata.normalize("NFC", word.word.strip())
+        if not text:
             continue
-        measure_start = measure_index * measure_seconds
-        slot = min(15, max(0, int((word.start - measure_start) // slot_seconds)))
-        lane.setdefault(measure_index + 1, {}).setdefault(slot, []).append(word.word)
+        absolute_slot = max(0, int(word.start // slot_seconds))
+        while absolute_slot in occupied_slots:
+            absolute_slot += 1
+        if absolute_slot >= total_slots:
+            total_slots = absolute_slot + 1
+
+        occupied_slots.add(absolute_slot)
+        measure_index = absolute_slot // 16
+        slot = absolute_slot % 16
+        measure_number = measure_index + 1
+        lane.setdefault(measure_number, {})[slot] = text
 
     return {
         measure: [
-            LyricSlot(slot=slot, lyric=" ".join(tokens))
-            for slot, tokens in sorted(slots.items())
+            LyricSlot(slot=slot, lyric=lyric)
+            for slot, lyric in sorted(slots.items())
         ]
-        for measure, slots in lane.items()
+        for measure, slots in sorted(lane.items())
     }
+
+
+def word_at_slot_time(words: list[LyricWord], slot_time: float) -> str | None:
+    """Lookup helper for notation post-processing remaps."""
+    for word in sorted(words, key=lambda item: item.start):
+        if word.start <= slot_time < word.end:
+            return unicodedata.normalize("NFC", word.word.strip()) or None
+    return None

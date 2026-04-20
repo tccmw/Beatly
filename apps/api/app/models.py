@@ -87,3 +87,10 @@ class AnalysisResult(BaseModel):
     ticks_per_quarter: int = 480
     midi_ticks: list[MidiTickEvent] = Field(default_factory=list)
     engraved_measures: list[EngravedMeasure] = Field(default_factory=list)
+
+
+class AnalysisJobStatus(BaseModel):
+    job_id: str
+    status: Literal["queued", "running", "succeeded", "failed"]
+    detail: str | None = None
+    result: AnalysisResult | None = None
