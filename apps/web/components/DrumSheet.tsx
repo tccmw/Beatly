@@ -1,10 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Articulation, Formatter, Renderer, Stave, StaveNote, Voice } from "vexflow";
 import type { AnalysisResult, DrumNote, EngravedMeasure, LyricWord, MidiTickEvent, ScoreEvent } from "@/lib/types";
 
-type Props = { score: AnalysisResult };
+type Props = {
+  audioCurrentTime?: number;
+  onSeek?: (time: number) => void;
+  score: AnalysisResult;
+};
 type VoiceNumber = 1 | 2;
 type NotationEvent = Pick<
   MidiTickEvent,
@@ -14,6 +18,11 @@ type MeasureSlot = {
   voice1: NotationEvent[];
   voice2: NotationEvent[];
   lyric?: string | null;
+  lyrics: SlotLyric[];
+};
+type SlotLyric = {
+  lyric: string;
+  row: number;
 };
 type Measure = { slots: MeasureSlot[] };
 type DisplayTick = {
@@ -21,6 +30,19 @@ type DisplayTick = {
   duration: "q" | "8" | "16";
   events: NotationEvent[];
   hiddenRest?: boolean;
+};
+type MeasureLayout = {
+  bottom: number;
+  gridEndX: number;
+  gridStartX: number;
+  measure: number;
+  slotWidth: number;
+  top: number;
+};
+type PlaybackPosition = {
+  measure: number;
+  slot: number;
+  slotProgress: number;
 };
 
 const NOTE_MAP: Record<DrumNote, { key: string; voice: VoiceNumber; notehead: "normal" | "x"; order: number }> = {
@@ -44,12 +66,32 @@ const LYRIC_MIN_GAP_PX = 6;
 const LYRIC_ROW_GAP_PX = 18;
 const LYRIC_MAX_ROWS = 2;
 
-export function DrumSheet({ score }: Props) {
-  const containerRef = useRef<HTMLDivElement | null>(null);
+export function DrumSheet({ audioCurrentTime = 0, onSeek, score }: Props) {
+  const boardRef = useRef<HTMLDivElement | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const svgLayerRef = useRef<HTMLDivElement | null>(null);
+  const [measureLayouts, setMeasureLayouts] = useState<MeasureLayout[]>([]);
   const measures = useMemo(() => toMeasures(score), [score]);
+  const playbackPosition = useMemo(
+    () => timeToPlaybackPosition(audioCurrentTime, score.bpm, measures.length),
+    [audioCurrentTime, measures.length, score.bpm],
+  );
+  const activeLayout = measureLayouts[playbackPosition.measure - 1] ?? null;
+  const activeMeasure = measures[playbackPosition.measure - 1] ?? null;
+  const activeSlot = activeMeasure?.slots[playbackPosition.slot] ?? null;
+  const activeLyric =
+    activeSlot?.lyrics[0]?.lyric?.trim().normalize("NFC") ??
+    activeSlot?.lyric?.trim().normalize("NFC") ??
+    null;
+  const cursorX = activeLayout
+    ? activeLayout.gridStartX +
+      (playbackPosition.slotProgress / SLOTS_PER_MEASURE) * (activeLayout.gridEndX - activeLayout.gridStartX)
+    : 0;
+  const activeSlotLeft = activeLayout ? activeLayout.gridStartX + playbackPosition.slot * activeLayout.slotWidth : 0;
+  const activeSlotHeight = activeLayout ? activeLayout.bottom - activeLayout.top : 0;
 
   useEffect(() => {
-    const container = containerRef.current;
+    const container = svgLayerRef.current;
     if (!container) {
       return;
     }
@@ -63,6 +105,7 @@ export function DrumSheet({ score }: Props) {
 
     const context = renderer.getContext();
     context.setFont("Arial, Malgun Gothic, sans-serif", 12);
+    const nextLayouts: MeasureLayout[] = [];
 
     measures.forEach((measure, index) => {
       const column = index % MEASURES_PER_LINE;
@@ -104,12 +147,102 @@ export function DrumSheet({ score }: Props) {
         drawGhostSnareMarks(context, upperNotes[tickIndex], tick);
       });
       drawLyricLane(context, stave, measure);
+      nextLayouts.push(measureLayoutFromStave(stave, index + 1));
     });
+
+    setMeasureLayouts(nextLayouts);
   }, [measures]);
 
+  useEffect(() => {
+    const layout = activeLayout;
+    const board = boardRef.current;
+    const scrollContainer = scrollRef.current;
+    if (!layout || !board || !scrollContainer) {
+      return;
+    }
+
+    const centerX = layout.gridStartX + (layout.gridEndX - layout.gridStartX) / 2;
+    const targetLeft = Math.max(0, centerX - scrollContainer.clientWidth / 2);
+    scrollContainer.scrollTo({ left: targetLeft, behavior: "smooth" });
+
+    const boardRect = board.getBoundingClientRect();
+    const centerY = boardRect.top + (layout.top + layout.bottom) / 2;
+    const targetTop = Math.max(0, window.scrollY + centerY - window.innerHeight / 2);
+    if (Math.abs(targetTop - window.scrollY) > 80) {
+      window.scrollTo({ top: targetTop, behavior: "smooth" });
+    }
+  }, [activeLayout, playbackPosition.measure]);
+
+  function handleBoardClick(event: React.MouseEvent<HTMLDivElement>) {
+    if (!onSeek || !boardRef.current) {
+      return;
+    }
+
+    const rect = boardRef.current.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+    const layout = findMeasureLayoutAtPoint(measureLayouts, x, y);
+    if (!layout) {
+      return;
+    }
+
+    const beatSeconds = 60 / Math.max(score.bpm || 120, 1);
+    const measureSeconds = beatSeconds * 4;
+    const fraction = clamp((x - layout.gridStartX) / (layout.gridEndX - layout.gridStartX), 0, 1);
+    onSeek((layout.measure - 1) * measureSeconds + fraction * measureSeconds);
+  }
+
   return (
-    <div className="score-wrap" aria-label="Drum sheet with lyrics">
-      <div className="score-canvas" ref={containerRef} />
+    <div className="score-wrap" ref={scrollRef} aria-label="Drum sheet with synchronized playback">
+      <div className="score-canvas">
+        <div
+          className={onSeek ? "score-board seekable" : "score-board"}
+          onClick={handleBoardClick}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              if (onSeek && activeLayout) {
+                const beatSeconds = 60 / Math.max(score.bpm || 120, 1);
+                onSeek((activeLayout.measure - 1) * beatSeconds * 4);
+              }
+            }
+          }}
+          ref={boardRef}
+          role={onSeek ? "button" : undefined}
+          tabIndex={onSeek ? 0 : undefined}
+        >
+          <div className="score-svg-layer" ref={svgLayerRef} />
+          {activeLayout ? (
+            <div className="score-overlay-layer" aria-hidden="true">
+              <div
+                className="playback-slot-highlight"
+                style={{
+                  height: activeSlotHeight,
+                  transform: `translate(${activeSlotLeft}px, ${activeLayout.top}px)`,
+                  width: activeLayout.slotWidth,
+                }}
+              />
+              <div
+                className="playback-cursor"
+                style={{
+                  height: activeSlotHeight,
+                  transform: `translate(${cursorX}px, ${activeLayout.top}px)`,
+                }}
+              />
+              {activeLyric ? (
+                <div
+                  className="playback-lyric-highlight"
+                  style={{
+                    transform: `translate(${cursorX}px, ${activeLayout.bottom - 28}px)`,
+                  }}
+                >
+                  {activeLyric}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      </div>
     </div>
   );
 }
@@ -356,20 +489,27 @@ function drawLyricLane(
   const rowRights = Array.from({ length: LYRIC_MAX_ROWS }, () => Number.NEGATIVE_INFINITY);
   const lyricY = stave.getYForLine(6) + 28;
   measure.slots.forEach((slot, slotIndex) => {
-    const lyric = slot.lyric?.trim().normalize("NFC");
-    if (!lyric) {
-      return;
+    const lyrics = slot.lyrics.length
+      ? slot.lyrics
+      : slot.lyric?.trim()
+        ? [{ lyric: slot.lyric, row: 0 }]
+        : [];
+    for (const slotLyric of lyrics) {
+      const lyric = slotLyric.lyric.trim().normalize("NFC");
+      if (!lyric) {
+        continue;
+      }
+
+      const x = slotToX(stave, slotIndex);
+      const width = lyricVisualWidth(lyric);
+      const left = x - width / 2;
+      const right = left + width;
+      const row = firstAvailableLyricRow(rowRights, left, slotLyric.row);
+      const y = lyricY + row * LYRIC_ROW_GAP_PX;
+
+      context.fillText(lyric, left, y);
+      rowRights[row] = right;
     }
-
-    const x = slotToX(stave, slotIndex);
-    const width = lyricVisualWidth(lyric);
-    const left = x - width / 2;
-    const right = left + width;
-    const row = firstAvailableLyricRow(rowRights, left);
-    const y = lyricY + row * LYRIC_ROW_GAP_PX;
-
-    context.fillText(lyric, left, y);
-    rowRights[row] = right;
   });
   context.restore();
 }
@@ -383,10 +523,15 @@ function lyricVisualWidth(text: string): number {
   }, 0);
 }
 
-function firstAvailableLyricRow(rowRights: number[], left: number): number {
-  const row = rowRights.findIndex((right) => left >= right + LYRIC_MIN_GAP_PX);
-  if (row >= 0) {
-    return row;
+function firstAvailableLyricRow(rowRights: number[], left: number, preferredRow: number): number {
+  const clampedRow = Math.min(LYRIC_MAX_ROWS - 1, Math.max(0, preferredRow));
+  if (left >= rowRights[clampedRow] + LYRIC_MIN_GAP_PX) {
+    return clampedRow;
+  }
+
+  const availableRow = rowRights.findIndex((right) => left >= right + LYRIC_MIN_GAP_PX);
+  if (availableRow >= 0) {
+    return availableRow;
   }
 
   return rowRights.indexOf(Math.min(...rowRights));
@@ -401,6 +546,58 @@ function slotToX(stave: Stave, slot: number): number {
   const startX = stave.getNoteStartX();
   const endX = stave.getNoteEndX();
   return startX + ((slot + 0.5) / SLOTS_PER_MEASURE) * (endX - startX);
+}
+
+function measureLayoutFromStave(stave: Stave, measure: number): MeasureLayout {
+  const slotZero = slotToX(stave, 0);
+  const slotOne = slotToX(stave, 1);
+  const slotWidth = Math.max(1, slotOne - slotZero);
+  const gridStartX = slotZero - slotWidth / 2;
+  const gridEndX = gridStartX + slotWidth * SLOTS_PER_MEASURE;
+  const top = stave.getYForLine(0) - 46;
+  const bottom = stave.getYForLine(6) + 68;
+
+  return {
+    bottom,
+    gridEndX,
+    gridStartX,
+    measure,
+    slotWidth,
+    top,
+  };
+}
+
+function timeToPlaybackPosition(currentTime: number, bpm: number, measureCount: number): PlaybackPosition {
+  const beatSeconds = 60 / Math.max(bpm || 120, 1);
+  const measureSeconds = beatSeconds * 4;
+  const slotSeconds = measureSeconds / SLOTS_PER_MEASURE;
+  const maxMeasureIndex = Math.max(0, measureCount - 1);
+  const measureIndex = Math.min(maxMeasureIndex, Math.max(0, Math.floor(currentTime / measureSeconds)));
+  const measureStart = measureIndex * measureSeconds;
+  const slotProgress = clamp((currentTime - measureStart) / slotSeconds, 0, SLOTS_PER_MEASURE);
+  const slot = Math.min(SLOTS_PER_MEASURE - 1, Math.max(0, Math.floor(slotProgress)));
+
+  return {
+    measure: measureIndex + 1,
+    slot,
+    slotProgress,
+  };
+}
+
+function findMeasureLayoutAtPoint(layouts: MeasureLayout[], x: number, y: number): MeasureLayout | null {
+  return (
+    layouts.find(
+      (layout) =>
+        y >= layout.top - 28 &&
+        y <= layout.bottom + 28 &&
+        x >= layout.gridStartX - 36 &&
+        x <= layout.gridEndX + 36,
+    ) ?? null
+  );
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
 }
 
 function drawMeasureNumber(
@@ -438,7 +635,9 @@ function isEngravedDisplayMeasure(measure: Measure): measure is EngravedDisplayM
 }
 
 function hasAnyLyrics(measures: Measure[]): boolean {
-  return measures.some((measure) => measure.slots.some((slot) => Boolean(slot.lyric?.trim())));
+  return measures.some((measure) =>
+    measure.slots.some((slot) => Boolean(slot.lyric?.trim()) || slot.lyrics.some((lyric) => Boolean(lyric.lyric.trim()))),
+  );
 }
 
 function measuresFromEngraved(engravedMeasures: EngravedMeasure[]): EngravedDisplayMeasure[] {
@@ -446,11 +645,11 @@ function measuresFromEngraved(engravedMeasures: EngravedMeasure[]): EngravedDisp
     const slots = emptySlots();
     for (const apiSlot of measure.slots ?? []) {
       const slot = slots[Math.min(SLOTS_PER_MEASURE - 1, Math.max(0, apiSlot.slot))];
-      slot.lyric = mergeLyric(slot.lyric, apiSlot.lyric ?? null);
+      addSlotLyric(slot, apiSlot.lyric ?? null, 0);
     }
     for (const lyricSlot of measure.lyric_slots ?? []) {
       const slot = slots[Math.min(SLOTS_PER_MEASURE - 1, Math.max(0, lyricSlot.slot))];
-      slot.lyric = mergeLyric(slot.lyric, lyricSlot.lyric);
+      addSlotLyric(slot, lyricSlot.lyric, lyricSlot.row ?? 0);
     }
     const displayVoice1 = measure.voice1.map((tick) => engravedTickToDisplayTick(tick, slots));
     const displayVoice2 = measure.voice2.map((tick) => engravedTickToDisplayTick(tick, slots));
@@ -478,7 +677,7 @@ function engravedTickToDisplayTick(
   } else {
     slot.voice2 = dedupeNotationEvents([...slot.voice2, ...events]);
   }
-  slot.lyric = mergeLyric(slot.lyric, tick.lyric ?? events.find((event) => event.lyric)?.lyric ?? null);
+  addSlotLyric(slot, tick.lyric ?? events.find((event) => event.lyric)?.lyric ?? null, 0);
 
   return {
     slot: tick.slot,
@@ -513,7 +712,7 @@ function measuresFromMidiTicks(ticks: MidiTickEvent[]): Measure[] {
         confidence: tick.confidence,
       };
       addNotationEvent(slot, event);
-      slot.lyric = mergeLyric(slot.lyric, tick.lyric ?? null);
+      addSlotLyric(slot, tick.lyric ?? null, 0);
     }
     return { slots };
   });
@@ -541,7 +740,7 @@ function measuresFromScoreEvents(events: ScoreEvent[], bpm: number): Measure[] {
       );
       const slot = slots[slotIndex];
       addNotationEvent(slot, scoreEventToNotationEvent(event));
-      slot.lyric = mergeLyric(slot.lyric, event.lyric ?? null);
+      addSlotLyric(slot, event.lyric ?? null, 0);
     }
     return { slots };
   });
@@ -567,7 +766,7 @@ function applyWordsFallback(measures: Measure[], words: LyricWord[], bpm: number
     );
     const targetSlot = firstAvailableLyricSlot(measure.slots, slotIndex);
     if (targetSlot !== null) {
-      measure.slots[targetSlot].lyric = word.word.trim().normalize("NFC");
+      addSlotLyric(measure.slots[targetSlot], word.word.trim().normalize("NFC"), 0);
     }
   }
 
@@ -576,7 +775,7 @@ function applyWordsFallback(measures: Measure[], words: LyricWord[], bpm: number
 
 function firstAvailableLyricSlot(slots: MeasureSlot[], preferredSlot: number): number | null {
   for (let slot = preferredSlot; slot < SLOTS_PER_MEASURE; slot += 1) {
-    if (!slots[slot].lyric?.trim()) {
+    if (!slots[slot].lyric?.trim() && slots[slot].lyrics.length === 0) {
       return slot;
     }
   }
@@ -611,7 +810,22 @@ function emptySlots(): MeasureSlot[] {
     voice1: [],
     voice2: [],
     lyric: null,
+    lyrics: [],
   }));
+}
+
+function addSlotLyric(slot: MeasureSlot, next: string | null | undefined, row: number) {
+  const cleanNext = next?.trim().normalize("NFC");
+  if (!cleanNext) {
+    return;
+  }
+
+  const cleanRow = Math.min(LYRIC_MAX_ROWS - 1, Math.max(0, row));
+  if (!slot.lyrics.some((lyric) => lyric.lyric === cleanNext && lyric.row === cleanRow)) {
+    slot.lyrics.push({ lyric: cleanNext, row: cleanRow });
+    slot.lyrics.sort((a, b) => a.row - b.row || a.lyric.localeCompare(b.lyric));
+  }
+  slot.lyric = mergeLyric(slot.lyric, cleanNext);
 }
 
 function addNotationEvent(slot: MeasureSlot, event: NotationEvent) {

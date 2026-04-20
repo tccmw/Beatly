@@ -1,29 +1,50 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { DrumSheet } from "@/components/DrumSheet";
+import {
+  SynchronizedScorePlayer,
+  type PlaybackSource,
+  type SynchronizedScorePlayerHandle,
+} from "@/components/SynchronizedScorePlayer";
 import { analyzeAudio, analyzeYouTube } from "@/lib/api";
 import type { AnalysisJobStatus, AnalysisResult } from "@/lib/types";
 
 type SourceType = "upload" | "youtube";
 
 export default function Home() {
+  const audioObjectUrlRef = useRef<string | null>(null);
+  const playerRef = useRef<SynchronizedScorePlayerHandle | null>(null);
   const [sourceType, setSourceType] = useState<SourceType>("upload");
   const [file, setFile] = useState<File | null>(null);
   const [youtubeUrl, setYoutubeUrl] = useState("");
   const [score, setScore] = useState<AnalysisResult | null>(null);
+  const [playbackSource, setPlaybackSource] = useState<PlaybackSource | null>(null);
+  const [audioCurrentTime, setAudioCurrentTime] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
   const [enableLyrics, setEnableLyrics] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [statusText, setStatusText] = useState<string | null>(null);
 
+  useEffect(() => {
+    return () => {
+      if (audioObjectUrlRef.current) {
+        URL.revokeObjectURL(audioObjectUrlRef.current);
+      }
+    };
+  }, []);
+
   async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (sourceType === "upload" && !file) {
+    const submittedSourceType = sourceType;
+    const submittedFile = file;
+    const submittedYoutubeUrl = youtubeUrl.trim();
+
+    if (submittedSourceType === "upload" && !submittedFile) {
       setError("Choose an MP3, WAV, M4A, or FLAC file.");
       return;
     }
-    if (sourceType === "youtube" && !youtubeUrl.trim()) {
+    if (submittedSourceType === "youtube" && !submittedYoutubeUrl) {
       setError("Enter a YouTube link.");
       return;
     }
@@ -39,10 +60,12 @@ export default function Home() {
         },
       };
       const result =
-        sourceType === "youtube"
-          ? await analyzeYouTube(youtubeUrl.trim(), options)
-          : await analyzeAudio(file as File, options);
+        submittedSourceType === "youtube"
+          ? await analyzeYouTube(submittedYoutubeUrl, options)
+          : await analyzeAudio(submittedFile as File, options);
+      setPlaybackSourceForInput(submittedSourceType, submittedFile, submittedYoutubeUrl);
       setScore(result);
+      setAudioCurrentTime(0);
       setStatusText(null);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Analysis failed.");
@@ -50,6 +73,52 @@ export default function Home() {
       setIsLoading(false);
     }
   }
+
+  function setPlaybackSourceForInput(
+    submittedSourceType: SourceType,
+    submittedFile: File | null,
+    submittedYoutubeUrl: string,
+  ) {
+    if (audioObjectUrlRef.current) {
+      URL.revokeObjectURL(audioObjectUrlRef.current);
+      audioObjectUrlRef.current = null;
+    }
+
+    if (submittedSourceType === "upload" && submittedFile) {
+      const objectUrl = URL.createObjectURL(submittedFile);
+      audioObjectUrlRef.current = objectUrl;
+      setPlaybackSource({
+        kind: "audio",
+        title: submittedFile.name,
+        url: objectUrl,
+      });
+      return;
+    }
+
+    if (submittedSourceType === "youtube") {
+      const videoId = extractYouTubeVideoId(submittedYoutubeUrl);
+      if (!videoId) {
+        setPlaybackSource(null);
+        throw new Error("Could not read the YouTube video id for playback.");
+      }
+
+      setPlaybackSource({
+        kind: "youtube",
+        title: submittedYoutubeUrl,
+        url: submittedYoutubeUrl,
+        videoId,
+      });
+    }
+  }
+
+  const handlePlayerTimeChange = useCallback((time: number) => {
+    setAudioCurrentTime((current) => (Math.abs(current - time) >= 0.008 ? time : current));
+  }, []);
+
+  const handleScoreSeek = useCallback((time: number) => {
+    playerRef.current?.seekTo(time);
+    setAudioCurrentTime(time);
+  }, []);
 
   return (
     <main className="page">
@@ -127,7 +196,16 @@ export default function Home() {
               <span className="pill">Drum events {score.events.length}</span>
               <span className="pill">Words {score.words.length}</span>
             </div>
-            <DrumSheet score={score} />
+            {playbackSource ? (
+              <SynchronizedScorePlayer
+                ref={playerRef}
+                currentTime={audioCurrentTime}
+                onTimeChange={handlePlayerTimeChange}
+                score={score}
+                source={playbackSource}
+              />
+            ) : null}
+            <DrumSheet audioCurrentTime={audioCurrentTime} onSeek={handleScoreSeek} score={score} />
           </>
         ) : (
           <div className="empty">No score generated yet.</div>
@@ -135,6 +213,30 @@ export default function Home() {
       </div>
     </main>
   );
+}
+
+function extractYouTubeVideoId(value: string): string | null {
+  try {
+    const url = new URL(value);
+    if (url.hostname === "youtu.be") {
+      return url.pathname.split("/").filter(Boolean)[0] ?? null;
+    }
+
+    const queryId = url.searchParams.get("v");
+    if (queryId) {
+      return queryId;
+    }
+
+    const parts = url.pathname.split("/").filter(Boolean);
+    const embedIndex = parts.findIndex((part) => part === "embed" || part === "shorts" || part === "live");
+    if (embedIndex >= 0) {
+      return parts[embedIndex + 1] ?? null;
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
 }
 
 function formatJobStatus(status: string, detail?: string | null): string {

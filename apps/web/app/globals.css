@@ -167,6 +167,89 @@ input {
   background: #fff;
 }
 
+.player-panel {
+  display: grid;
+  gap: 14px;
+  margin: 14px 0 18px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.player-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.player-kicker {
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.player-title {
+  max-width: 780px;
+  overflow: hidden;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.player-button {
+  min-width: 92px;
+  min-height: 40px;
+  border: 0;
+  border-radius: 8px;
+  color: #fff;
+  background: var(--accent);
+  cursor: pointer;
+}
+
+.transport-row,
+.volume-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.seek-slider {
+  flex: 1 1 360px;
+  min-width: 180px;
+}
+
+.volume-row {
+  color: var(--muted);
+}
+
+.volume-row input {
+  width: 180px;
+}
+
+.time-label {
+  min-width: 46px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.youtube-player-shell {
+  width: 320px;
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #000;
+}
+
+.youtube-player-shell iframe {
+  display: block;
+  max-width: 100%;
+}
+
 .score-wrap {
   margin-top: 18px;
   overflow-x: auto;
@@ -178,6 +261,59 @@ input {
 .score-canvas {
   min-width: 920px;
   padding: 16px 12px 8px;
+}
+
+.score-board {
+  position: relative;
+  display: inline-block;
+}
+
+.score-board.seekable {
+  cursor: pointer;
+}
+
+.score-svg-layer {
+  position: relative;
+  z-index: 1;
+}
+
+.score-overlay-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.playback-slot-highlight,
+.playback-cursor,
+.playback-lyric-highlight {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+}
+
+.playback-slot-highlight {
+  border-radius: 4px;
+  background: rgba(14, 124, 102, 0.08);
+}
+
+.playback-cursor {
+  width: 3px;
+  border-radius: 3px;
+  background: #d92d20;
+  box-shadow: 0 0 0 1px rgba(217, 45, 32, 0.18);
+}
+
+.playback-lyric-highlight {
+  padding: 2px 5px;
+  border-radius: 6px;
+  color: #fff;
+  background: #0e7c66;
+  font-size: 12px;
+  line-height: 1.2;
+  transform-origin: center;
+  white-space: nowrap;
 }
 
 .empty {
@@ -205,6 +341,19 @@ input {
   .file-input,
   .text-input,
   .button {
+    width: 100%;
+  }
+
+  .player-header,
+  .transport-row,
+  .volume-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .player-button,
+  .seek-slider,
+  .volume-row input {
     width: 100%;
   }
 }

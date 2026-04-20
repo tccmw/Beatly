@@ -16,7 +16,7 @@ from app.models import LyricWord
 logger = logging.getLogger("uvicorn.error")
 
 CAPTION_MIN_DURATION_SECONDS = 0.1
-CAPTION_LAYOUT_VERSION = "youtube-caption-grid-v2"
+CAPTION_LAYOUT_VERSION = "youtube-whisper-alignment-v1"
 CAPTION_ROLLING_OVERLAP_SECONDS = 0.75
 USER_AGENT = "Beatly/0.1 (+https://localhost)"
 YOUTUBE_HOST_PATTERN = re.compile(r"(youtube\.com|youtu\.be|music\.youtube\.com)", re.IGNORECASE)
@@ -302,15 +302,11 @@ def _caption_cues_to_words(cues: list[CaptionCue]) -> list[LyricWord]:
             previous_units = raw_units
             previous_end = max(previous_end, cue.end)
             continue
-        duration = max(cue.end - start_base, CAPTION_MIN_DURATION_SECONDS * len(units))
-        step = duration / len(units)
-        for index, unit in enumerate(units):
-            start = start_base + index * step
-            end = start_base + (index + 1) * step
-            words.append(_lyric_word(unit, start, end))
+        for unit in units:
+            words.append(_lyric_word(unit, start_base, cue.end))
         previous_units = raw_units
         previous_end = max(previous_end, cue.end)
-    return _sanitize_word_timeline(words)
+    return words
 
 
 def _clean_caption_text(text: str) -> str:
