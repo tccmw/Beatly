@@ -8,6 +8,7 @@ type Props = {
   audioCurrentTime?: number;
   onSeek?: (time: number) => void;
   score: AnalysisResult;
+  showLyrics?: boolean;
 };
 type VoiceNumber = 1 | 2;
 type NotationEvent = Pick<
@@ -59,19 +60,20 @@ const MEASURES_PER_LINE = 4;
 const MEASURE_WIDTH = 320;
 const LEFT_MARGIN = 28;
 const TOP_MARGIN = 26;
-const LINE_HEIGHT = 196;
+const LINE_HEIGHT_WITH_LYRICS = 178;
+const LINE_HEIGHT_WITHOUT_LYRICS = 142;
 const SLOTS_PER_MEASURE = 16;
 const LYRIC_FONT_SIZE = 12;
-const LYRIC_MIN_GAP_PX = 6;
-const LYRIC_ROW_GAP_PX = 18;
+const LYRIC_HORIZONTAL_PADDING_PX = 5;
 const LYRIC_MAX_ROWS = 2;
 
-export function DrumSheet({ audioCurrentTime = 0, onSeek, score }: Props) {
+export function DrumSheet({ audioCurrentTime = 0, onSeek, score, showLyrics = true }: Props) {
   const boardRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const svgLayerRef = useRef<HTMLDivElement | null>(null);
   const [measureLayouts, setMeasureLayouts] = useState<MeasureLayout[]>([]);
   const measures = useMemo(() => toMeasures(score), [score]);
+  const lineHeight = showLyrics ? LINE_HEIGHT_WITH_LYRICS : LINE_HEIGHT_WITHOUT_LYRICS;
   const playbackPosition = useMemo(
     () => timeToPlaybackPosition(audioCurrentTime, score.bpm, measures.length),
     [audioCurrentTime, measures.length, score.bpm],
@@ -79,10 +81,11 @@ export function DrumSheet({ audioCurrentTime = 0, onSeek, score }: Props) {
   const activeLayout = measureLayouts[playbackPosition.measure - 1] ?? null;
   const activeMeasure = measures[playbackPosition.measure - 1] ?? null;
   const activeSlot = activeMeasure?.slots[playbackPosition.slot] ?? null;
-  const activeLyric =
-    activeSlot?.lyrics[0]?.lyric?.trim().normalize("NFC") ??
-    activeSlot?.lyric?.trim().normalize("NFC") ??
-    null;
+  const activeLyric = showLyrics
+    ? (activeSlot?.lyrics[0]?.lyric?.trim().normalize("NFC") ??
+      activeSlot?.lyric?.trim().normalize("NFC") ??
+      null)
+    : null;
   const cursorX = activeLayout
     ? activeLayout.gridStartX +
       (playbackPosition.slotProgress / SLOTS_PER_MEASURE) * (activeLayout.gridEndX - activeLayout.gridStartX)
@@ -99,7 +102,7 @@ export function DrumSheet({ audioCurrentTime = 0, onSeek, score }: Props) {
     container.innerHTML = "";
 
     const width = LEFT_MARGIN * 2 + MEASURES_PER_LINE * MEASURE_WIDTH;
-    const height = Math.max(260, Math.ceil(measures.length / MEASURES_PER_LINE) * LINE_HEIGHT + TOP_MARGIN);
+    const height = Math.max(240, Math.ceil(measures.length / MEASURES_PER_LINE) * lineHeight + TOP_MARGIN);
     const renderer = new Renderer(container, Renderer.Backends.SVG);
     renderer.resize(width, height);
 
@@ -111,7 +114,7 @@ export function DrumSheet({ audioCurrentTime = 0, onSeek, score }: Props) {
       const column = index % MEASURES_PER_LINE;
       const row = Math.floor(index / MEASURES_PER_LINE);
       const x = LEFT_MARGIN + column * MEASURE_WIDTH;
-      const y = TOP_MARGIN + row * LINE_HEIGHT;
+      const y = TOP_MARGIN + row * lineHeight;
       const staveWidth = MEASURE_WIDTH;
 
       const stave = new Stave(x, y, staveWidth);
@@ -146,12 +149,14 @@ export function DrumSheet({ audioCurrentTime = 0, onSeek, score }: Props) {
         drawHiHatStateMarks(context, upperNotes[tickIndex], tick);
         drawGhostSnareMarks(context, upperNotes[tickIndex], tick);
       });
-      drawLyricLane(context, stave, measure);
-      nextLayouts.push(measureLayoutFromStave(stave, index + 1));
+      if (showLyrics) {
+        drawLyricLane(context, stave, measure);
+      }
+      nextLayouts.push(measureLayoutFromStave(stave, index + 1, showLyrics));
     });
 
     setMeasureLayouts(nextLayouts);
-  }, [measures]);
+  }, [lineHeight, measures, showLyrics]);
 
   useEffect(() => {
     const layout = activeLayout;
@@ -486,7 +491,7 @@ function drawLyricLane(
 ) {
   context.save();
   context.setFont("Arial, Malgun Gothic, sans-serif", LYRIC_FONT_SIZE);
-  const rowRights = Array.from({ length: LYRIC_MAX_ROWS }, () => Number.NEGATIVE_INFINITY);
+  let lastRight = Number.NEGATIVE_INFINITY;
   const lyricY = stave.getYForLine(6) + 28;
   measure.slots.forEach((slot, slotIndex) => {
     const lyrics = slot.lyrics.length
@@ -502,13 +507,12 @@ function drawLyricLane(
 
       const x = slotToX(stave, slotIndex);
       const width = lyricVisualWidth(lyric);
-      const left = x - width / 2;
+      const desiredLeft = x - width / 2;
+      const left = Math.max(desiredLeft, lastRight + LYRIC_HORIZONTAL_PADDING_PX);
       const right = left + width;
-      const row = firstAvailableLyricRow(rowRights, left, slotLyric.row);
-      const y = lyricY + row * LYRIC_ROW_GAP_PX;
 
-      context.fillText(lyric, left, y);
-      rowRights[row] = right;
+      context.fillText(lyric, left, lyricY);
+      lastRight = right;
     }
   });
   context.restore();
@@ -523,20 +527,6 @@ function lyricVisualWidth(text: string): number {
   }, 0);
 }
 
-function firstAvailableLyricRow(rowRights: number[], left: number, preferredRow: number): number {
-  const clampedRow = Math.min(LYRIC_MAX_ROWS - 1, Math.max(0, preferredRow));
-  if (left >= rowRights[clampedRow] + LYRIC_MIN_GAP_PX) {
-    return clampedRow;
-  }
-
-  const availableRow = rowRights.findIndex((right) => left >= right + LYRIC_MIN_GAP_PX);
-  if (availableRow >= 0) {
-    return availableRow;
-  }
-
-  return rowRights.indexOf(Math.min(...rowRights));
-}
-
 function isHangulSyllable(char: string): boolean {
   const code = char.charCodeAt(0);
   return code >= 0xac00 && code <= 0xd7a3;
@@ -548,14 +538,14 @@ function slotToX(stave: Stave, slot: number): number {
   return startX + ((slot + 0.5) / SLOTS_PER_MEASURE) * (endX - startX);
 }
 
-function measureLayoutFromStave(stave: Stave, measure: number): MeasureLayout {
+function measureLayoutFromStave(stave: Stave, measure: number, showLyrics: boolean): MeasureLayout {
   const slotZero = slotToX(stave, 0);
   const slotOne = slotToX(stave, 1);
   const slotWidth = Math.max(1, slotOne - slotZero);
   const gridStartX = slotZero - slotWidth / 2;
   const gridEndX = gridStartX + slotWidth * SLOTS_PER_MEASURE;
   const top = stave.getYForLine(0) - 46;
-  const bottom = stave.getYForLine(6) + 68;
+  const bottom = showLyrics ? stave.getYForLine(6) + 52 : stave.getYForLine(5) + 24;
 
   return {
     bottom,

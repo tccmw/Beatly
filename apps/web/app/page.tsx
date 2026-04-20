@@ -23,6 +23,7 @@ export default function Home() {
   const [audioCurrentTime, setAudioCurrentTime] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
   const [enableLyrics, setEnableLyrics] = useState(true);
+  const [showLyrics, setShowLyrics] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [statusText, setStatusText] = useState<string | null>(null);
 
@@ -172,6 +173,13 @@ export default function Home() {
             <button className="button" disabled={isLoading} type="submit">
               {isLoading ? "Analyzing..." : "Generate Score"}
             </button>
+            <button
+              className={showLyrics ? "source-button active" : "source-button"}
+              onClick={() => setShowLyrics((current) => !current)}
+              type="button"
+            >
+              {showLyrics ? "Hide Lyrics" : "Show Lyrics"}
+            </button>
           </div>
           <label className="option-row">
             <input
@@ -205,7 +213,12 @@ export default function Home() {
                 source={playbackSource}
               />
             ) : null}
-            <DrumSheet audioCurrentTime={audioCurrentTime} onSeek={handleScoreSeek} score={score} />
+            <DrumSheet
+              audioCurrentTime={audioCurrentTime}
+              onSeek={handleScoreSeek}
+              score={score}
+              showLyrics={showLyrics}
+            />
           </>
         ) : (
           <div className="empty">No score generated yet.</div>
