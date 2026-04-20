@@ -633,9 +633,12 @@ function hasAnyLyrics(measures: Measure[]): boolean {
 function measuresFromEngraved(engravedMeasures: EngravedMeasure[]): EngravedDisplayMeasure[] {
   return engravedMeasures.map((measure) => {
     const slots = emptySlots();
-    for (const apiSlot of measure.slots ?? []) {
-      const slot = slots[Math.min(SLOTS_PER_MEASURE - 1, Math.max(0, apiSlot.slot))];
-      addSlotLyric(slot, apiSlot.lyric ?? null, 0);
+    const hasLyricSlots = (measure.lyric_slots?.length ?? 0) > 0;
+    if (!hasLyricSlots) {
+      for (const apiSlot of measure.slots ?? []) {
+        const slot = slots[Math.min(SLOTS_PER_MEASURE - 1, Math.max(0, apiSlot.slot))];
+        addSlotLyric(slot, apiSlot.lyric ?? null, 0);
+      }
     }
     for (const lyricSlot of measure.lyric_slots ?? []) {
       const slot = slots[Math.min(SLOTS_PER_MEASURE - 1, Math.max(0, lyricSlot.slot))];
@@ -811,10 +814,8 @@ function addSlotLyric(slot: MeasureSlot, next: string | null | undefined, row: n
   }
 
   const cleanRow = Math.min(LYRIC_MAX_ROWS - 1, Math.max(0, row));
-  if (!slot.lyrics.some((lyric) => lyric.lyric === cleanNext && lyric.row === cleanRow)) {
-    slot.lyrics.push({ lyric: cleanNext, row: cleanRow });
-    slot.lyrics.sort((a, b) => a.row - b.row || a.lyric.localeCompare(b.lyric));
-  }
+  slot.lyrics.push({ lyric: cleanNext, row: cleanRow });
+  slot.lyrics.sort((a, b) => a.row - b.row);
   slot.lyric = mergeLyric(slot.lyric, cleanNext);
 }
 
