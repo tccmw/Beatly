@@ -16,7 +16,8 @@ from app.models import LyricWord
 logger = logging.getLogger("uvicorn.error")
 
 CAPTION_MIN_DURATION_SECONDS = 0.1
-MAX_UNSPLIT_KOREAN_SYLLABLES = 2
+CAPTION_LAYOUT_VERSION = "youtube-caption-grid-v2"
+CAPTION_ROLLING_OVERLAP_SECONDS = 0.75
 USER_AGENT = "Beatly/0.1 (+https://localhost)"
 YOUTUBE_HOST_PATTERN = re.compile(r"(youtube\.com|youtu\.be|music\.youtube\.com)", re.IGNORECASE)
 VTT_TIME_PATTERN = re.compile(
@@ -279,20 +280,36 @@ def _parse_vtt_time(value: str) -> float:
 def _caption_cues_to_words(cues: list[CaptionCue]) -> list[LyricWord]:
     words: list[LyricWord] = []
     previous_text = ""
+    previous_units: list[str] = []
+    previous_end = 0.0
     for cue in cues:
         text = _clean_caption_text(cue.text)
-        if not text or text == previous_text:
+        if not text:
+            continue
+        raw_units = _expand_caption_units(text)
+        if text == previous_text:
+            previous_units = raw_units
+            previous_end = max(previous_end, cue.end)
             continue
         previous_text = text
-        units = _expand_caption_units(text)
+        units = raw_units
+        start_base = cue.start
+        if cue.start <= previous_end + CAPTION_ROLLING_OVERLAP_SECONDS:
+            units = _trim_rolling_caption_units(units, previous_units)
+            if len(units) < len(raw_units):
+                start_base = max(cue.start, previous_end)
         if not units:
+            previous_units = raw_units
+            previous_end = max(previous_end, cue.end)
             continue
-        duration = max(cue.end - cue.start, CAPTION_MIN_DURATION_SECONDS * len(units))
+        duration = max(cue.end - start_base, CAPTION_MIN_DURATION_SECONDS * len(units))
         step = duration / len(units)
         for index, unit in enumerate(units):
-            start = cue.start + index * step
-            end = cue.start + (index + 1) * step
+            start = start_base + index * step
+            end = start_base + (index + 1) * step
             words.append(_lyric_word(unit, start, end))
+        previous_units = raw_units
+        previous_end = max(previous_end, cue.end)
     return _sanitize_word_timeline(words)
 
 
@@ -307,15 +324,43 @@ def _clean_caption_text(text: str) -> str:
 
 def _expand_caption_units(text: str) -> list[str]:
     units: list[str] = []
-    for token in text.split():
-        normalized = _strip_token(token)
-        if not normalized:
+    buffer: list[str] = []
+
+    def flush_buffer() -> None:
+        if not buffer:
+            return
+        token = _strip_token("".join(buffer))
+        if token:
+            units.append(token)
+        buffer.clear()
+
+    for char in unicodedata.normalize("NFC", text):
+        if _is_hangul_syllable(char):
+            flush_buffer()
+            units.append(char)
             continue
-        syllables = [char for char in normalized if _is_hangul_syllable(char)]
-        if len(syllables) > MAX_UNSPLIT_KOREAN_SYLLABLES:
-            units.extend(syllables)
-        else:
-            units.append(normalized)
+        if char.isspace() or unicodedata.category(char).startswith("P"):
+            flush_buffer()
+            continue
+        buffer.append(char)
+
+    flush_buffer()
+    return units
+
+
+def _trim_rolling_caption_units(units: list[str], previous_units: list[str]) -> list[str]:
+    if not units or not previous_units:
+        return units
+
+    for start in range(0, len(previous_units) - len(units) + 1):
+        if previous_units[start : start + len(units)] == units:
+            return []
+
+    max_overlap = min(len(units), len(previous_units))
+    for size in range(max_overlap, 0, -1):
+        if previous_units[-size:] == units[:size]:
+            return units[size:]
+
     return units
 
 
@@ -352,6 +397,8 @@ def _is_hangul_syllable(char: str) -> bool:
 
 def _caption_cache_key(caption_source: str, payload: str) -> str:
     digest = hashlib.sha256()
+    digest.update(CAPTION_LAYOUT_VERSION.encode("utf-8"))
+    digest.update(b"\0")
     digest.update(caption_source.encode("utf-8"))
     digest.update(b"\0")
     digest.update(payload.encode("utf-8"))
