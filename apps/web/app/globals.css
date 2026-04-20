@@ -20,7 +20,7 @@ body {
   min-height: 100%;
   color: var(--ink);
   background: var(--paper);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: Arial, "Malgun Gothic", Helvetica, sans-serif;
 }
 
 button,
@@ -75,6 +75,14 @@ input {
   gap: 12px;
 }
 
+.option-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
 .file-input {
   min-width: 260px;
   max-width: 100%;
@@ -101,6 +109,10 @@ input {
 
 .error {
   color: var(--red);
+}
+
+.status {
+  color: var(--accent-strong);
 }
 
 .meta {

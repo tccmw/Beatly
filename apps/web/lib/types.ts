@@ -81,3 +81,10 @@ export type AnalysisResult = {
   midi_ticks: MidiTickEvent[];
   engraved_measures: EngravedMeasure[];
 };
+
+export type AnalysisJobStatus = {
+  job_id: string;
+  status: "queued" | "running" | "succeeded" | "failed";
+  detail?: string | null;
+  result?: AnalysisResult | null;
+};

@@ -39,6 +39,8 @@ const LEFT_MARGIN = 28;
 const TOP_MARGIN = 26;
 const LINE_HEIGHT = 176;
 const SLOTS_PER_MEASURE = 16;
+const LYRIC_MIN_GAP_PX = 8;
+const LYRIC_HANGUL_PADDING_PX = 2;
 
 export function DrumSheet({ score }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -99,7 +101,7 @@ export function DrumSheet({ score }: Props) {
         drawHiHatStateMarks(context, upperNotes[tickIndex], tick);
         drawGhostSnareMarks(context, upperNotes[tickIndex], tick);
       });
-      drawLyricLane(context, stave, measure, upperNotes, upperTicks, y);
+      drawLyricLane(context, stave, measure, upperNotes, upperTicks);
     });
   }, [measures]);
 
@@ -348,7 +350,6 @@ function drawLyricLane(
   measure: Measure,
   notes: StaveNote[],
   ticks: DisplayTick[],
-  staveY: number,
 ) {
   const noteXBySlot = new Map<number, number>();
   ticks.forEach((tick, index) => {
@@ -356,17 +357,37 @@ function drawLyricLane(
   });
 
   context.save();
-  context.setFont("Arial", 13);
+  context.setFont("Arial, Malgun Gothic, sans-serif", 13);
+  let lastRight = Number.NEGATIVE_INFINITY;
+  const lyricY = stave.getYForLine(6) + 28;
   measure.slots.forEach((slot, slotIndex) => {
-    const lyric = slot.lyric?.trim();
+    const lyric = slot.lyric?.trim().normalize("NFC");
     if (!lyric) {
       return;
     }
 
     const x = noteXBySlot.get(slotIndex) ?? slotToX(stave, slotIndex);
-    context.fillText(lyric, x - 10, staveY + 126);
+    const width = lyricVisualWidth(lyric);
+    const left = x - width / 2;
+    const right = left + width;
+    if (left < lastRight + LYRIC_MIN_GAP_PX) {
+      return;
+    }
+
+    context.fillText(lyric, left, lyricY);
+    lastRight = right;
   });
   context.restore();
+}
+
+function lyricVisualWidth(text: string): number {
+  const hangulCount = Array.from(text).filter(isHangulSyllable).length;
+  return text.length * 8 + hangulCount * LYRIC_HANGUL_PADDING_PX;
+}
+
+function isHangulSyllable(char: string): boolean {
+  const code = char.charCodeAt(0);
+  return code >= 0xac00 && code <= 0xd7a3;
 }
 
 function slotToX(stave: Stave, slot: number): number {
@@ -397,7 +418,7 @@ function toMeasures(score: AnalysisResult): Measure[] {
     measures = measuresFromScoreEvents(score.events, score.bpm);
   }
 
-  return applyWordsFallback(measures, score.words, score.bpm);
+  return hasAnyLyrics(measures) ? measures : applyWordsFallback(measures, score.words, score.bpm);
 }
 
 type EngravedDisplayMeasure = Measure & {
@@ -407,6 +428,10 @@ type EngravedDisplayMeasure = Measure & {
 
 function isEngravedDisplayMeasure(measure: Measure): measure is EngravedDisplayMeasure {
   return "displayVoice1" in measure && "displayVoice2" in measure;
+}
+
+function hasAnyLyrics(measures: Measure[]): boolean {
+  return measures.some((measure) => measure.slots.some((slot) => Boolean(slot.lyric?.trim())));
 }
 
 function measuresFromEngraved(engravedMeasures: EngravedMeasure[]): EngravedDisplayMeasure[] {
@@ -533,10 +558,22 @@ function applyWordsFallback(measures: Measure[], words: LyricWord[], bpm: number
       SLOTS_PER_MEASURE - 1,
       Math.max(0, Math.floor((word.start - measureStart) / slotSeconds)),
     );
-    measure.slots[slotIndex].lyric = mergeLyric(measure.slots[slotIndex].lyric, word.word);
+    const targetSlot = firstAvailableLyricSlot(measure.slots, slotIndex);
+    if (targetSlot !== null) {
+      measure.slots[targetSlot].lyric = word.word.trim().normalize("NFC");
+    }
   }
 
   return measures;
+}
+
+function firstAvailableLyricSlot(slots: MeasureSlot[], preferredSlot: number): number | null {
+  for (let slot = preferredSlot; slot < SLOTS_PER_MEASURE; slot += 1) {
+    if (!slots[slot].lyric?.trim()) {
+      return slot;
+    }
+  }
+  return null;
 }
 
 function ensureMeasure(measures: Measure[], measureIndex: number): Measure {

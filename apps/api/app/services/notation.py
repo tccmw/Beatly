@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import unicodedata
 from dataclasses import dataclass
 
 from app.models import (
@@ -665,16 +666,23 @@ def _rebalance_voice_to_4_4(ticks: list[EngravedTick], voice: int) -> list[Engra
 
 
 def _sanitize_lyric_slots(slots: list[LyricSlot]) -> list[LyricSlot]:
-    by_slot: dict[int, list[str]] = {}
+    by_slot: dict[int, str] = {}
+    occupied: set[int] = set()
     for slot in slots:
         index = min(SLOTS_PER_MEASURE - 1, max(0, slot.slot))
-        text = slot.lyric.strip()
-        if text:
-            by_slot.setdefault(index, []).append(text)
+        text = unicodedata.normalize("NFC", slot.lyric.strip())
+        if not text:
+            continue
+        while index in occupied and index < SLOTS_PER_MEASURE - 1:
+            index += 1
+        if index in occupied:
+            continue
+        occupied.add(index)
+        by_slot[index] = text
 
     return [
-        LyricSlot(slot=slot, lyric=" ".join(parts))
-        for slot, parts in sorted(by_slot.items())
+        LyricSlot(slot=slot, lyric=lyric)
+        for slot, lyric in sorted(by_slot.items())
     ]
 
 
