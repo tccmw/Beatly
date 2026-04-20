@@ -37,10 +37,12 @@ const MEASURES_PER_LINE = 4;
 const MEASURE_WIDTH = 320;
 const LEFT_MARGIN = 28;
 const TOP_MARGIN = 26;
-const LINE_HEIGHT = 176;
+const LINE_HEIGHT = 196;
 const SLOTS_PER_MEASURE = 16;
-const LYRIC_MIN_GAP_PX = 8;
-const LYRIC_HANGUL_PADDING_PX = 2;
+const LYRIC_FONT_SIZE = 12;
+const LYRIC_MIN_GAP_PX = 6;
+const LYRIC_ROW_GAP_PX = 18;
+const LYRIC_MAX_ROWS = 2;
 
 export function DrumSheet({ score }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -101,7 +103,7 @@ export function DrumSheet({ score }: Props) {
         drawHiHatStateMarks(context, upperNotes[tickIndex], tick);
         drawGhostSnareMarks(context, upperNotes[tickIndex], tick);
       });
-      drawLyricLane(context, stave, measure, upperNotes, upperTicks);
+      drawLyricLane(context, stave, measure);
     });
   }, [measures]);
 
@@ -348,17 +350,10 @@ function drawLyricLane(
   context: ReturnType<InstanceType<typeof Renderer>["getContext"]>,
   stave: Stave,
   measure: Measure,
-  notes: StaveNote[],
-  ticks: DisplayTick[],
 ) {
-  const noteXBySlot = new Map<number, number>();
-  ticks.forEach((tick, index) => {
-    noteXBySlot.set(tick.slot, notes[index].getAbsoluteX());
-  });
-
   context.save();
-  context.setFont("Arial, Malgun Gothic, sans-serif", 13);
-  let lastRight = Number.NEGATIVE_INFINITY;
+  context.setFont("Arial, Malgun Gothic, sans-serif", LYRIC_FONT_SIZE);
+  const rowRights = Array.from({ length: LYRIC_MAX_ROWS }, () => Number.NEGATIVE_INFINITY);
   const lyricY = stave.getYForLine(6) + 28;
   measure.slots.forEach((slot, slotIndex) => {
     const lyric = slot.lyric?.trim().normalize("NFC");
@@ -366,23 +361,35 @@ function drawLyricLane(
       return;
     }
 
-    const x = noteXBySlot.get(slotIndex) ?? slotToX(stave, slotIndex);
+    const x = slotToX(stave, slotIndex);
     const width = lyricVisualWidth(lyric);
     const left = x - width / 2;
     const right = left + width;
-    if (left < lastRight + LYRIC_MIN_GAP_PX) {
-      return;
-    }
+    const row = firstAvailableLyricRow(rowRights, left);
+    const y = lyricY + row * LYRIC_ROW_GAP_PX;
 
-    context.fillText(lyric, left, lyricY);
-    lastRight = right;
+    context.fillText(lyric, left, y);
+    rowRights[row] = right;
   });
   context.restore();
 }
 
 function lyricVisualWidth(text: string): number {
-  const hangulCount = Array.from(text).filter(isHangulSyllable).length;
-  return text.length * 8 + hangulCount * LYRIC_HANGUL_PADDING_PX;
+  return Array.from(text).reduce((width, char) => {
+    if (isHangulSyllable(char)) {
+      return width + LYRIC_FONT_SIZE;
+    }
+    return width + 7;
+  }, 0);
+}
+
+function firstAvailableLyricRow(rowRights: number[], left: number): number {
+  const row = rowRights.findIndex((right) => left >= right + LYRIC_MIN_GAP_PX);
+  if (row >= 0) {
+    return row;
+  }
+
+  return rowRights.indexOf(Math.min(...rowRights));
 }
 
 function isHangulSyllable(char: string): boolean {
@@ -393,7 +400,7 @@ function isHangulSyllable(char: string): boolean {
 function slotToX(stave: Stave, slot: number): number {
   const startX = stave.getNoteStartX();
   const endX = stave.getNoteEndX();
-  return startX + (slot / SLOTS_PER_MEASURE) * (endX - startX);
+  return startX + ((slot + 0.5) / SLOTS_PER_MEASURE) * (endX - startX);
 }
 
 function drawMeasureNumber(

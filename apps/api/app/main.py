@@ -22,6 +22,7 @@ from app.services.drum_separation import DrumSeparationError, separate_stems_wit
 from app.services.lyrics import preload_whisper_model, transcribe_words_with_whisper
 from app.services.notation import TICKS_PER_QUARTER, build_engraved_measures, build_midi_tick_list
 from app.services.score_merge import build_lyric_lane, merge_drums_and_lyrics
+from app.services.youtube_source import YouTubeSourceError, is_youtube_url, prepare_youtube_source
 
 logger = logging.getLogger("uvicorn.error")
 KOREAN_WHISPER_MODEL_FALLBACK = "large-v3-turbo"
@@ -106,6 +107,33 @@ async def start_analysis_job(
     return job
 
 
+@app.post("/analyze/youtube/jobs", response_model=AnalysisJobStatus)
+async def start_youtube_analysis_job(
+    background_tasks: BackgroundTasks,
+    youtube_url: str = Form(...),
+    enable_lyrics: bool | None = Form(default=None),
+) -> AnalysisJobStatus:
+    settings = get_settings()
+    if not is_youtube_url(youtube_url):
+        raise HTTPException(status_code=400, detail="Enter a valid YouTube URL.")
+
+    should_extract_lyrics = settings.enable_lyrics if enable_lyrics is None else enable_lyrics
+    request_id = uuid4().hex[:8]
+    job = AnalysisJobStatus(
+        job_id=request_id,
+        status="queued",
+        detail="Queued for YouTube analysis.",
+    )
+    _set_job(job)
+    background_tasks.add_task(
+        _run_youtube_analysis_job,
+        request_id,
+        youtube_url,
+        should_extract_lyrics,
+    )
+    return job
+
+
 @app.get("/analyze/jobs/{job_id}", response_model=AnalysisJobStatus)
 def get_analysis_job(job_id: str) -> AnalysisJobStatus:
     job = _get_job(job_id)
@@ -137,36 +165,94 @@ def _run_analysis_job(
     _update_job(job_id, status="succeeded", detail="Analysis finished.", result=result)
 
 
+def _run_youtube_analysis_job(
+    job_id: str,
+    youtube_url: str,
+    should_extract_lyrics: bool,
+) -> None:
+    settings = get_settings()
+    _update_job(job_id, status="running", detail="Fetching YouTube audio and captions.")
+    try:
+        youtube_source = prepare_youtube_source(
+            youtube_url,
+            settings.youtube_dir / job_id,
+            fetch_captions=should_extract_lyrics,
+            progress=lambda detail: _update_job(job_id, status="running", detail=detail),
+        )
+        caption_words = youtube_source.caption_words if should_extract_lyrics else None
+        if caption_words:
+            logger.info(
+                "[%s] youtube captions selected source=%s words=%d",
+                job_id,
+                youtube_source.caption_source,
+                len(caption_words),
+            )
+            _update_job(job_id, status="running", detail="Using YouTube captions for lyrics.")
+        else:
+            logger.info("[%s] youtube captions unavailable; using existing lyric extraction path", job_id)
+            if should_extract_lyrics:
+                _update_job(job_id, status="running", detail="No YouTube captions found. Using Whisper.")
+
+        result = _run_analysis(
+            youtube_source.audio_path,
+            youtube_source.title,
+            job_id,
+            should_extract_lyrics and not caption_words,
+            progress=lambda detail: _update_job(job_id, status="running", detail=detail),
+            provided_words=caption_words,
+            lyric_source_key=youtube_source.lyric_cache_key,
+        )
+    except YouTubeSourceError as exc:
+        logger.exception("[%s] youtube analysis setup failed", job_id)
+        _update_job(job_id, status="failed", detail=str(exc), result=None)
+        return
+    except Exception as exc:
+        logger.exception("[%s] youtube analysis failed", job_id)
+        _update_job(job_id, status="failed", detail=f"Analysis failed: {exc}", result=None)
+        return
+
+    _update_job(job_id, status="succeeded", detail="Analysis finished.", result=result)
+
+
 def _run_analysis(
     upload_path: Path,
     original_filename: str,
     request_id: str,
     should_extract_lyrics: bool,
     progress: Callable[[str], None] | None = None,
+    provided_words: list[LyricWord] | None = None,
+    lyric_source_key: str | None = None,
 ) -> AnalysisResult:
     settings = get_settings()
     analysis_started = time.perf_counter()
     logger.info("[%s] analysis started for %s", request_id, original_filename)
     upload_hash = _file_sha256(upload_path)
+    has_provided_lyrics = bool(provided_words)
+    needs_whisper_lyrics = should_extract_lyrics and not has_provided_lyrics
+    has_any_lyrics = should_extract_lyrics or has_provided_lyrics
     demucs_mode = _demucs_mode_for_request(
         settings.demucs_mode,
-        should_extract_lyrics,
+        needs_whisper_lyrics,
         settings.force_vocals_for_lyrics,
     )
-    whisper_model = _korean_whisper_model(settings.whisper_model) if should_extract_lyrics else settings.whisper_model
+    whisper_model = _korean_whisper_model(settings.whisper_model) if needs_whisper_lyrics else settings.whisper_model
     cache_key = _analysis_cache_key(
         upload_hash,
-        should_extract_lyrics,
+        has_any_lyrics,
         demucs_mode,
         whisper_model,
         settings,
+        lyric_source_key=lyric_source_key,
     )
     if cached_result := _load_cached_analysis(settings.analysis_cache_dir, cache_key):
         logger.info("[%s] analysis cache hit key=%s", request_id, cache_key[:12])
         _report_progress(progress, "Loaded cached analysis.")
         return cached_result
 
-    if should_extract_lyrics and settings.whisper_engine.strip().lower() in {"faster-whisper", "faster_whisper", "ctranslate2", "ct2"}:
+    if (
+        needs_whisper_lyrics
+        and settings.whisper_engine.strip().lower() in {"faster-whisper", "faster_whisper", "ctranslate2", "ct2"}
+    ):
         _report_progress(progress, "Preparing Korean lyric model cache.")
         preload_whisper_model(
             whisper_model,
@@ -198,7 +284,7 @@ def _run_analysis(
         stems.drums,
         stems.vocals,
         settings.separated_dir / upload_path.stem / "prepared",
-        include_vocals=should_extract_lyrics,
+        include_vocals=needs_whisper_lyrics,
     )
     logger.info("[%s] audio preprocessing finished in %.1fs", request_id, time.perf_counter() - step_started)
 
@@ -213,7 +299,10 @@ def _run_analysis(
         len(drum_events),
     )
 
-    if should_extract_lyrics:
+    if has_provided_lyrics:
+        words = sorted(provided_words, key=lambda item: (item.start, item.end))
+        logger.info("[%s] lyric transcription skipped because %d caption words were provided", request_id, len(words))
+    elif needs_whisper_lyrics:
         step_started = time.perf_counter()
         _report_progress(progress, "Transcribing Korean lyrics with Whisper.")
         logger.info(
@@ -357,6 +446,7 @@ def _analysis_cache_key(
     demucs_mode: str,
     whisper_model: str,
     settings: object,
+    lyric_source_key: str | None = None,
 ) -> str:
     payload = {
         "audio_sha256": upload_hash,
@@ -372,6 +462,7 @@ def _analysis_cache_key(
         "whisper_engine": getattr(settings, "whisper_engine", None),
         "whisper_model": whisper_model,
         "whisper_vad_filter": getattr(settings, "whisper_vad_filter", None),
+        "lyric_source_key": lyric_source_key,
     }
     serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
