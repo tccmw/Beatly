@@ -184,6 +184,12 @@ input {
   gap: 16px;
 }
 
+.player-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 .player-kicker {
   margin-bottom: 4px;
   color: var(--muted);
@@ -207,6 +213,18 @@ input {
   color: #fff;
   background: var(--accent);
   cursor: pointer;
+}
+
+.player-follow-button {
+  border: 1px solid var(--line);
+  color: var(--muted);
+  background: #fff;
+}
+
+.player-follow-button.active {
+  border-color: var(--accent);
+  color: #fff;
+  background: var(--accent);
 }
 
 .transport-row,
@@ -281,6 +299,7 @@ input {
   position: absolute;
   inset: 0;
   z-index: 2;
+  opacity: 0;
   pointer-events: none;
 }
 
@@ -290,6 +309,7 @@ input {
   position: absolute;
   top: 0;
   left: 0;
+  will-change: transform;
   pointer-events: none;
 }
 
@@ -351,6 +371,7 @@ input {
     flex-direction: column;
   }
 
+  .player-actions,
   .player-button,
   .seek-slider,
   .volume-row input {

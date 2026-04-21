@@ -1,6 +1,6 @@
 "use client";
 
-import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import type { AnalysisResult } from "@/lib/types";
 
 export type PlaybackSource =
@@ -24,6 +24,9 @@ export type SynchronizedScorePlayerHandle = {
 
 type Props = {
   currentTime: number;
+  followPlayback: boolean;
+  onFollowPlaybackChange: (enabled: boolean) => void;
+  onPlaybackStateChange?: (playing: boolean) => void;
   onTimeChange: (time: number) => void;
   score: AnalysisResult;
   source: PlaybackSource;
@@ -69,17 +72,51 @@ const YOUTUBE_ENDED = 0;
 let youtubeApiPromise: Promise<YouTubeApi> | null = null;
 
 export const SynchronizedScorePlayer = forwardRef<SynchronizedScorePlayerHandle, Props>(
-  function SynchronizedScorePlayer({ currentTime, onTimeChange, score, source }, ref) {
+  function SynchronizedScorePlayer(
+    { currentTime, followPlayback, onFollowPlaybackChange, onPlaybackStateChange, onTimeChange, score, source },
+    ref,
+  ) {
     const audioRef = useRef<HTMLAudioElement | null>(null);
     const volumeRef = useRef(0.85);
     const youtubeMountRef = useRef<HTMLDivElement | null>(null);
     const youtubePlayerRef = useRef<YouTubePlayer | null>(null);
+    const playbackLoopFrameRef = useRef<number | null>(null);
     const [duration, setDuration] = useState(0);
     const [isPlaying, setIsPlaying] = useState(false);
     const [volume, setVolume] = useState(0.85);
     const sourceKey = source.kind === "youtube" ? `youtube:${source.videoId}` : `audio:${source.url}`;
     const scoreDuration = useMemo(() => estimateScoreDuration(score), [score]);
     const playbackDuration = duration > 0 ? duration : scoreDuration;
+
+    const publishPlaybackSnapshot = useCallback(() => {
+      const nextTime = readCurrentTime(source, audioRef.current, youtubePlayerRef.current);
+      if (Number.isFinite(nextTime)) {
+        onTimeChange(nextTime);
+      }
+
+      const nextDuration = readDuration(source, audioRef.current, youtubePlayerRef.current);
+      if (Number.isFinite(nextDuration) && nextDuration > 0) {
+        setDuration((current) => (Math.abs(current - nextDuration) > 0.25 ? nextDuration : current));
+      }
+    }, [onTimeChange, source]);
+
+    const stopPlaybackLoop = useCallback(() => {
+      if (playbackLoopFrameRef.current !== null) {
+        cancelAnimationFrame(playbackLoopFrameRef.current);
+        playbackLoopFrameRef.current = null;
+      }
+    }, []);
+
+    const startPlaybackLoop = useCallback(() => {
+      stopPlaybackLoop();
+
+      const tick = () => {
+        publishPlaybackSnapshot();
+        playbackLoopFrameRef.current = requestAnimationFrame(tick);
+      };
+
+      playbackLoopFrameRef.current = requestAnimationFrame(tick);
+    }, [publishPlaybackSnapshot, stopPlaybackLoop]);
 
     useEffect(() => {
       volumeRef.current = volume;
@@ -103,8 +140,13 @@ export const SynchronizedScorePlayer = forwardRef<SynchronizedScorePlayerHandle,
     useEffect(() => {
       setIsPlaying(false);
       setDuration(0);
+      stopPlaybackLoop();
       onTimeChange(0);
-    }, [onTimeChange, sourceKey]);
+    }, [onTimeChange, sourceKey, stopPlaybackLoop]);
+
+    useEffect(() => {
+      onPlaybackStateChange?.(isPlaying);
+    }, [isPlaying, onPlaybackStateChange]);
 
     useEffect(() => {
       if (source.kind !== "audio") {
@@ -131,6 +173,7 @@ export const SynchronizedScorePlayer = forwardRef<SynchronizedScorePlayerHandle,
       if (source.kind !== "youtube") {
         youtubePlayerRef.current?.destroy();
         youtubePlayerRef.current = null;
+        stopPlaybackLoop();
         return;
       }
 
@@ -164,14 +207,19 @@ export const SynchronizedScorePlayer = forwardRef<SynchronizedScorePlayerHandle,
               if (Number.isFinite(nextDuration) && nextDuration > 0) {
                 setDuration(nextDuration);
               }
+              publishPlaybackSnapshot();
             },
             onStateChange: (event) => {
               if (event.data === YOUTUBE_PLAYING) {
                 setIsPlaying(true);
+                startPlaybackLoop();
+                publishPlaybackSnapshot();
                 return;
               }
               if (event.data === YOUTUBE_PAUSED || event.data === YOUTUBE_ENDED) {
                 setIsPlaying(false);
+                stopPlaybackLoop();
+                publishPlaybackSnapshot();
               }
             },
           },
@@ -181,38 +229,23 @@ export const SynchronizedScorePlayer = forwardRef<SynchronizedScorePlayerHandle,
 
       return () => {
         disposed = true;
+        stopPlaybackLoop();
         youtubePlayerRef.current?.destroy();
         youtubePlayerRef.current = null;
       };
-    }, [source]);
-
-    useEffect(() => {
-      let frame = 0;
-      const tick = () => {
-        const nextTime = readCurrentTime(source, audioRef.current, youtubePlayerRef.current);
-        if (Number.isFinite(nextTime)) {
-          onTimeChange(nextTime);
-        }
-
-        const nextDuration = readDuration(source, audioRef.current, youtubePlayerRef.current);
-        if (Number.isFinite(nextDuration) && nextDuration > 0) {
-          setDuration((current) => (Math.abs(current - nextDuration) > 0.25 ? nextDuration : current));
-        }
-
-        frame = requestAnimationFrame(tick);
-      };
-
-      frame = requestAnimationFrame(tick);
-      return () => cancelAnimationFrame(frame);
-    }, [onTimeChange, source]);
+    }, [publishPlaybackSnapshot, source, startPlaybackLoop, stopPlaybackLoop]);
 
     function togglePlayback() {
       if (isPlaying) {
         pauseSource(source, audioRef.current, youtubePlayerRef.current);
+        stopPlaybackLoop();
         return;
       }
 
       void playSource(source, audioRef.current, youtubePlayerRef.current);
+      if (source.kind === "audio") {
+        startPlaybackLoop();
+      }
     }
 
     function seekTo(seconds: number) {
@@ -228,19 +261,41 @@ export const SynchronizedScorePlayer = forwardRef<SynchronizedScorePlayerHandle,
             <div className="player-kicker">{source.kind === "youtube" ? "YouTube source" : "Uploaded audio"}</div>
             <div className="player-title">{source.title}</div>
           </div>
-          <button className="player-button" onClick={togglePlayback} type="button">
-            {isPlaying ? "Pause" : "Play"}
-          </button>
+          <div className="player-actions">
+            <button className="player-button" onClick={togglePlayback} type="button">
+              {isPlaying ? "Pause" : "Play"}
+            </button>
+            <button
+              aria-pressed={followPlayback}
+              className={followPlayback ? "player-button player-follow-button active" : "player-button player-follow-button"}
+              onClick={() => onFollowPlaybackChange(!followPlayback)}
+              type="button"
+            >
+              {followPlayback ? "Follow On" : "Follow Off"}
+            </button>
+          </div>
         </div>
 
         {source.kind === "audio" ? (
           <audio
             ref={audioRef}
             onDurationChange={(event) => setDuration(safeDuration(event.currentTarget.duration))}
-            onEnded={() => setIsPlaying(false)}
+            onEnded={() => {
+              setIsPlaying(false);
+              stopPlaybackLoop();
+              publishPlaybackSnapshot();
+            }}
             onLoadedMetadata={(event) => setDuration(safeDuration(event.currentTarget.duration))}
-            onPause={() => setIsPlaying(false)}
-            onPlay={() => setIsPlaying(true)}
+            onPause={() => {
+              setIsPlaying(false);
+              stopPlaybackLoop();
+              publishPlaybackSnapshot();
+            }}
+            onPlay={() => {
+              setIsPlaying(true);
+              startPlaybackLoop();
+            }}
+            onSeeked={publishPlaybackSnapshot}
             preload="metadata"
             src={source.url}
           />
