@@ -24,7 +24,9 @@ export default function Home() {
   const [audioCurrentTime, setAudioCurrentTime] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+  const [isPlaybackActive, setIsPlaybackActive] = useState(false);
   const [enableLyrics, setEnableLyrics] = useState(true);
+  const [followPlayback, setFollowPlayback] = useState(true);
   const [showLyrics, setShowLyrics] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [statusText, setStatusText] = useState<string | null>(null);
@@ -69,6 +71,8 @@ export default function Home() {
       setPlaybackSourceForInput(submittedSourceType, submittedFile, submittedYoutubeUrl);
       setScore(result);
       setAudioCurrentTime(0);
+      setIsPlaybackActive(false);
+      setFollowPlayback(true);
       setStatusText(null);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Analysis failed.");
@@ -276,6 +280,9 @@ export default function Home() {
               <SynchronizedScorePlayer
                 ref={playerRef}
                 currentTime={audioCurrentTime}
+                followPlayback={followPlayback}
+                onFollowPlaybackChange={setFollowPlayback}
+                onPlaybackStateChange={setIsPlaybackActive}
                 onTimeChange={handlePlayerTimeChange}
                 score={score}
                 source={playbackSource}
@@ -283,7 +290,10 @@ export default function Home() {
             ) : null}
             <DrumSheet
               audioCurrentTime={audioCurrentTime}
+              followPlayback={followPlayback}
+              isPlaying={isPlaybackActive}
               onSeek={handleScoreSeek}
+              onFollowPlaybackChange={setFollowPlayback}
               ref={sheetRef}
               score={score}
               showLyrics={showLyrics}

@@ -1,11 +1,14 @@
 "use client";
 
-import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { Articulation, Formatter, Renderer, Stave, StaveNote, Voice } from "vexflow";
 import type { AnalysisResult, DrumNote, EngravedMeasure, LyricWord, MidiTickEvent, ScoreEvent } from "@/lib/types";
 
 type Props = {
   audioCurrentTime?: number;
+  followPlayback?: boolean;
+  isPlaying?: boolean;
+  onFollowPlaybackChange?: (enabled: boolean) => void;
   onSeek?: (time: number) => void;
   score: AnalysisResult;
   showLyrics?: boolean;
@@ -76,14 +79,22 @@ const SLOTS_PER_MEASURE = 16;
 const LYRIC_FONT_SIZE = 12;
 const LYRIC_HORIZONTAL_PADDING_PX = 5;
 const LYRIC_MAX_ROWS = 2;
+const AUTO_SCROLL_GUARD_MS = 1000;
 
 export const DrumSheet = forwardRef<DrumSheetHandle, Props>(function DrumSheet(
-  { audioCurrentTime = 0, onSeek, score, showLyrics = true }: Props,
+  { audioCurrentTime = 0, followPlayback = true, isPlaying = false, onFollowPlaybackChange, onSeek, score, showLyrics = true }: Props,
   ref,
 ) {
   const boardRef = useRef<HTMLDivElement | null>(null);
+  const cursorRef = useRef<HTMLDivElement | null>(null);
+  const lyricHighlightRef = useRef<HTMLDivElement | null>(null);
+  const overlayLayerRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const slotHighlightRef = useRef<HTMLDivElement | null>(null);
   const svgLayerRef = useRef<HTMLDivElement | null>(null);
+  const autoScrollGuardUntilRef = useRef(0);
+  const followPlaybackRef = useRef(followPlayback);
+  const isPlayingRef = useRef(isPlaying);
   const [measureLayouts, setMeasureLayouts] = useState<MeasureLayout[]>([]);
   const measures = useMemo(() => toMeasures(score), [score]);
   const lineHeight = showLyrics ? LINE_HEIGHT_WITH_LYRICS : LINE_HEIGHT_WITHOUT_LYRICS;
@@ -92,19 +103,27 @@ export const DrumSheet = forwardRef<DrumSheetHandle, Props>(function DrumSheet(
     [audioCurrentTime, measures.length, score.bpm],
   );
   const activeLayout = measureLayouts[playbackPosition.measure - 1] ?? null;
-  const activeMeasure = measures[playbackPosition.measure - 1] ?? null;
-  const activeSlot = activeMeasure?.slots[playbackPosition.slot] ?? null;
-  const activeLyric = showLyrics
-    ? (activeSlot?.lyrics[0]?.lyric?.trim().normalize("NFC") ??
-      activeSlot?.lyric?.trim().normalize("NFC") ??
-      null)
-    : null;
-  const cursorX = activeLayout
-    ? activeLayout.gridStartX +
-      (playbackPosition.slotProgress / SLOTS_PER_MEASURE) * (activeLayout.gridEndX - activeLayout.gridStartX)
-    : 0;
-  const activeSlotLeft = activeLayout ? activeLayout.gridStartX + playbackPosition.slot * activeLayout.slotWidth : 0;
-  const activeSlotHeight = activeLayout ? activeLayout.bottom - activeLayout.top : 0;
+
+  useEffect(() => {
+    followPlaybackRef.current = followPlayback;
+  }, [followPlayback]);
+
+  useEffect(() => {
+    isPlayingRef.current = isPlaying;
+  }, [isPlaying]);
+
+  const disableFollowPlayback = useCallback(
+    (ignoreGuard: boolean) => {
+      if (!followPlaybackRef.current || !isPlayingRef.current) {
+        return;
+      }
+      if (!ignoreGuard && performance.now() <= autoScrollGuardUntilRef.current) {
+        return;
+      }
+      onFollowPlaybackChange?.(false);
+    },
+    [onFollowPlaybackChange],
+  );
 
   useImperativeHandle(
     ref,
@@ -183,10 +202,11 @@ export const DrumSheet = forwardRef<DrumSheetHandle, Props>(function DrumSheet(
     const layout = activeLayout;
     const board = boardRef.current;
     const scrollContainer = scrollRef.current;
-    if (!layout || !board || !scrollContainer) {
+    if (!followPlayback || !layout || !board || !scrollContainer) {
       return;
     }
 
+    autoScrollGuardUntilRef.current = performance.now() + AUTO_SCROLL_GUARD_MS;
     const centerX = layout.gridStartX + (layout.gridEndX - layout.gridStartX) / 2;
     const targetLeft = Math.max(0, centerX - scrollContainer.clientWidth / 2);
     scrollContainer.scrollTo({ left: targetLeft, behavior: "smooth" });
@@ -197,7 +217,81 @@ export const DrumSheet = forwardRef<DrumSheetHandle, Props>(function DrumSheet(
     if (Math.abs(targetTop - window.scrollY) > 80) {
       window.scrollTo({ top: targetTop, behavior: "smooth" });
     }
-  }, [activeLayout, playbackPosition.measure]);
+  }, [activeLayout, followPlayback, isPlaying, playbackPosition.measure]);
+
+  useEffect(() => {
+    let frame = 0;
+    frame = requestAnimationFrame(() => {
+      const overlayLayer = overlayLayerRef.current;
+      const slotHighlight = slotHighlightRef.current;
+      const cursor = cursorRef.current;
+      const lyricHighlight = lyricHighlightRef.current;
+      const layout = measureLayouts[playbackPosition.measure - 1] ?? null;
+      const measure = measures[playbackPosition.measure - 1] ?? null;
+      const slot = measure?.slots[playbackPosition.slot] ?? null;
+      const lyric = showLyrics
+        ? (slot?.lyrics[0]?.lyric?.trim().normalize("NFC") ?? slot?.lyric?.trim().normalize("NFC") ?? null)
+        : null;
+
+      if (!overlayLayer || !slotHighlight || !cursor || !lyricHighlight) {
+        return;
+      }
+
+      if (!layout) {
+        overlayLayer.style.opacity = "0";
+        lyricHighlight.style.opacity = "0";
+        return;
+      }
+
+      const cursorX =
+        layout.gridStartX + (playbackPosition.slotProgress / SLOTS_PER_MEASURE) * (layout.gridEndX - layout.gridStartX);
+      const activeSlotLeft = layout.gridStartX + playbackPosition.slot * layout.slotWidth;
+      const activeSlotHeight = layout.bottom - layout.top;
+
+      overlayLayer.style.opacity = "1";
+      slotHighlight.style.height = `${activeSlotHeight}px`;
+      slotHighlight.style.width = `${layout.slotWidth}px`;
+      slotHighlight.style.transform = `translate(${activeSlotLeft}px, ${layout.top}px)`;
+
+      cursor.style.height = `${activeSlotHeight}px`;
+      cursor.style.transform = `translate(${cursorX}px, ${layout.top}px)`;
+
+      if (lyric) {
+        lyricHighlight.textContent = lyric;
+        lyricHighlight.style.opacity = "1";
+        lyricHighlight.style.transform = `translate(${cursorX}px, ${layout.bottom - 28}px)`;
+      } else {
+        lyricHighlight.textContent = "";
+        lyricHighlight.style.opacity = "0";
+      }
+    });
+
+    return () => cancelAnimationFrame(frame);
+  }, [measureLayouts, measures, playbackPosition, showLyrics]);
+
+  useEffect(() => {
+    const scrollContainer = scrollRef.current;
+    if (!scrollContainer) {
+      return;
+    }
+
+    const handleWindowScroll = () => disableFollowPlayback(false);
+    const handleContainerScroll = () => disableFollowPlayback(false);
+    const handleWindowWheel = () => disableFollowPlayback(true);
+    const handleTouchStart = () => disableFollowPlayback(true);
+
+    window.addEventListener("scroll", handleWindowScroll, { passive: true });
+    window.addEventListener("wheel", handleWindowWheel, { passive: true });
+    scrollContainer.addEventListener("scroll", handleContainerScroll, { passive: true });
+    scrollContainer.addEventListener("touchstart", handleTouchStart, { passive: true });
+
+    return () => {
+      window.removeEventListener("scroll", handleWindowScroll);
+      window.removeEventListener("wheel", handleWindowWheel);
+      scrollContainer.removeEventListener("scroll", handleContainerScroll);
+      scrollContainer.removeEventListener("touchstart", handleTouchStart);
+    };
+  }, [disableFollowPlayback]);
 
   function handleBoardClick(event: React.MouseEvent<HTMLDivElement>) {
     if (!onSeek || !boardRef.current) {
@@ -238,35 +332,11 @@ export const DrumSheet = forwardRef<DrumSheetHandle, Props>(function DrumSheet(
           tabIndex={onSeek ? 0 : undefined}
         >
           <div className="score-svg-layer" ref={svgLayerRef} />
-          {activeLayout ? (
-            <div className="score-overlay-layer" aria-hidden="true">
-              <div
-                className="playback-slot-highlight"
-                style={{
-                  height: activeSlotHeight,
-                  transform: `translate(${activeSlotLeft}px, ${activeLayout.top}px)`,
-                  width: activeLayout.slotWidth,
-                }}
-              />
-              <div
-                className="playback-cursor"
-                style={{
-                  height: activeSlotHeight,
-                  transform: `translate(${cursorX}px, ${activeLayout.top}px)`,
-                }}
-              />
-              {activeLyric ? (
-                <div
-                  className="playback-lyric-highlight"
-                  style={{
-                    transform: `translate(${cursorX}px, ${activeLayout.bottom - 28}px)`,
-                  }}
-                >
-                  {activeLyric}
-                </div>
-              ) : null}
-            </div>
-          ) : null}
+          <div className="score-overlay-layer" aria-hidden="true" ref={overlayLayerRef}>
+            <div className="playback-slot-highlight" ref={slotHighlightRef} />
+            <div className="playback-cursor" ref={cursorRef} />
+            <div className="playback-lyric-highlight" ref={lyricHighlightRef} />
+          </div>
         </div>
       </div>
     </div>
