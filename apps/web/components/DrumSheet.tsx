@@ -96,7 +96,9 @@ export const DrumSheet = forwardRef<DrumSheetHandle, Props>(function DrumSheet(
 ) {
   const boardRefs = useRef<Array<HTMLDivElement | null>>([]);
   const cursorRefs = useRef<Array<HTMLDivElement | null>>([]);
+  const followTargetRefs = useRef<Array<HTMLDivElement | null>>([]);
   const lyricHighlightRefs = useRef<Array<HTMLDivElement | null>>([]);
+  const measureHighlightRefs = useRef<Array<HTMLDivElement | null>>([]);
   const overlayLayerRefs = useRef<Array<HTMLDivElement | null>>([]);
   const pageRefs = useRef<Array<HTMLDivElement | null>>([]);
   const slotHighlightRefs = useRef<Array<HTMLDivElement | null>>([]);
@@ -105,7 +107,11 @@ export const DrumSheet = forwardRef<DrumSheetHandle, Props>(function DrumSheet(
   const autoScrollGuardUntilRef = useRef(0);
   const followPlaybackRef = useRef(followPlayback);
   const isPlayingRef = useRef(isPlaying);
+  const forceCenterNextAlignRef = useRef(false);
+  const lastFollowTargetKeyRef = useRef<string | null>(null);
+  const previousFollowPlaybackRef = useRef(followPlayback);
   const [measureLayouts, setMeasureLayouts] = useState<MeasureLayout[]>([]);
+  const [pageTranslateX, setPageTranslateX] = useState(0);
   const [visiblePageIndex, setVisiblePageIndex] = useState(0);
   const measures = useMemo(() => toMeasures(score), [score]);
   const lineHeight = showLyrics ? LINE_HEIGHT_WITH_LYRICS : LINE_HEIGHT_WITHOUT_LYRICS;
@@ -234,6 +240,8 @@ export const DrumSheet = forwardRef<DrumSheetHandle, Props>(function DrumSheet(
         }
       });
 
+      const followTarget = activePageIndex >= 0 ? followTargetRefs.current[activePageIndex] : null;
+      const measureHighlight = activePageIndex >= 0 ? measureHighlightRefs.current[activePageIndex] : null;
       const overlayLayer = activePageIndex >= 0 ? overlayLayerRefs.current[activePageIndex] : null;
       const slotHighlight = activePageIndex >= 0 ? slotHighlightRefs.current[activePageIndex] : null;
       const cursor = activePageIndex >= 0 ? cursorRefs.current[activePageIndex] : null;
@@ -246,12 +254,13 @@ export const DrumSheet = forwardRef<DrumSheetHandle, Props>(function DrumSheet(
         ? (slot?.lyrics[0]?.lyric?.trim().normalize("NFC") ?? slot?.lyric?.trim().normalize("NFC") ?? null)
         : null;
 
-      if (!overlayLayer || !slotHighlight || !cursor || !lyricHighlight || !board) {
+      if (!followTarget || !measureHighlight || !overlayLayer || !slotHighlight || !cursor || !lyricHighlight || !board) {
         return;
       }
 
       if (!layout) {
         overlayLayer.style.opacity = "0";
+        measureHighlight.style.opacity = "0";
         lyricHighlight.style.opacity = "0";
         return;
       }
@@ -259,18 +268,27 @@ export const DrumSheet = forwardRef<DrumSheetHandle, Props>(function DrumSheet(
       const cursorX =
         layout.gridStartX + (playbackPosition.slotProgress / SLOTS_PER_MEASURE) * (layout.gridEndX - layout.gridStartX);
       const activeSlotLeft = layout.gridStartX + playbackPosition.slot * layout.slotWidth;
+      const activeMeasureWidth = layout.gridEndX - layout.gridStartX;
       const activeSlotHeight = layout.bottom - layout.top;
+      const activeMeasureCenterY = (layout.top + layout.bottom) / 2;
       const boardRect = board.getBoundingClientRect();
       const scaleX = boardRect.width / PAGE_WIDTH_PX;
       const scaleY = boardRect.height / PAGE_HEIGHT_PX;
 
       overlayLayer.style.opacity = "1";
+      measureHighlight.style.opacity = "1";
+      measureHighlight.style.height = `${activeSlotHeight * scaleY}px`;
+      measureHighlight.style.width = `${activeMeasureWidth * scaleX}px`;
+      measureHighlight.style.transform = `translate(${layout.gridStartX * scaleX}px, ${layout.top * scaleY}px)`;
+
       slotHighlight.style.height = `${activeSlotHeight * scaleY}px`;
       slotHighlight.style.width = `${layout.slotWidth * scaleX}px`;
       slotHighlight.style.transform = `translate(${activeSlotLeft * scaleX}px, ${layout.top * scaleY}px)`;
 
       cursor.style.height = `${activeSlotHeight * scaleY}px`;
       cursor.style.transform = `translate(${cursorX * scaleX}px, ${layout.top * scaleY}px)`;
+
+      followTarget.style.top = `${activeMeasureCenterY * scaleY}px`;
 
       if (lyric) {
         lyricHighlight.textContent = lyric;
@@ -286,66 +304,26 @@ export const DrumSheet = forwardRef<DrumSheetHandle, Props>(function DrumSheet(
   }, [activeLayout, measureLayouts, measures, playbackPosition, showLyrics]);
 
   useEffect(() => {
-    const viewport = viewportRef.current;
-    if (!viewport) {
-      return;
-    }
-
-    let frame = 0;
-    const updateVisiblePage = () => {
-      if (!viewportRef.current || pages.length === 0) {
-        return;
-      }
-      const viewportCenter = viewportRef.current.scrollLeft + viewportRef.current.clientWidth / 2;
-      let nextIndex = 0;
-      let nextDistance = Number.POSITIVE_INFINITY;
-      pageRefs.current.forEach((page, pageIndex) => {
-        if (!page) {
-          return;
-        }
-        const center = page.offsetLeft + page.clientWidth / 2;
-        const distance = Math.abs(center - viewportCenter);
-        if (distance < nextDistance) {
-          nextDistance = distance;
-          nextIndex = pageIndex;
-        }
-      });
-      setVisiblePageIndex((current) => (current === nextIndex ? current : nextIndex));
-    };
-
     const handleWindowScroll = () => disableFollowPlayback(false);
-    const handleViewportScroll = () => {
-      disableFollowPlayback(false);
-      if (frame) {
-        cancelAnimationFrame(frame);
-      }
-      frame = requestAnimationFrame(updateVisiblePage);
-    };
-    const handleWindowWheel = () => disableFollowPlayback(true);
-    const handleTouchStart = () => disableFollowPlayback(true);
-
-    updateVisiblePage();
+    const handleUserScrollIntent = () => disableFollowPlayback(true);
     window.addEventListener("scroll", handleWindowScroll, { passive: true });
-    window.addEventListener("wheel", handleWindowWheel, { passive: true });
-    viewport.addEventListener("scroll", handleViewportScroll, { passive: true });
-    viewport.addEventListener("touchstart", handleTouchStart, { passive: true });
+    window.addEventListener("wheel", handleUserScrollIntent, { passive: true });
+    window.addEventListener("touchmove", handleUserScrollIntent, { passive: true });
 
     return () => {
-      if (frame) {
-        cancelAnimationFrame(frame);
-      }
       window.removeEventListener("scroll", handleWindowScroll);
-      window.removeEventListener("wheel", handleWindowWheel);
-      viewport.removeEventListener("scroll", handleViewportScroll);
-      viewport.removeEventListener("touchstart", handleTouchStart);
+      window.removeEventListener("wheel", handleUserScrollIntent);
+      window.removeEventListener("touchmove", handleUserScrollIntent);
     };
-  }, [disableFollowPlayback, pages.length]);
+  }, [disableFollowPlayback]);
 
   useEffect(() => {
     setVisiblePageIndex((current) => Math.min(current, Math.max(0, pages.length - 1)));
     boardRefs.current = boardRefs.current.slice(0, pages.length);
     cursorRefs.current = cursorRefs.current.slice(0, pages.length);
+    followTargetRefs.current = followTargetRefs.current.slice(0, pages.length);
     lyricHighlightRefs.current = lyricHighlightRefs.current.slice(0, pages.length);
+    measureHighlightRefs.current = measureHighlightRefs.current.slice(0, pages.length);
     overlayLayerRefs.current = overlayLayerRefs.current.slice(0, pages.length);
     pageRefs.current = pageRefs.current.slice(0, pages.length);
     slotHighlightRefs.current = slotHighlightRefs.current.slice(0, pages.length);
@@ -370,31 +348,126 @@ export const DrumSheet = forwardRef<DrumSheetHandle, Props>(function DrumSheet(
   }, []);
 
   const scrollToPage = useCallback((pageIndex: number, behavior: ScrollBehavior = "smooth") => {
-    const viewport = viewportRef.current;
-    if (!viewport || !pageRefs.current[pageIndex]) {
+    if (!pageRefs.current[pageIndex]) {
       return;
     }
 
     autoScrollGuardUntilRef.current = performance.now() + AUTO_SCROLL_GUARD_MS;
-    const targetLeft = getPageScrollLeft(pageIndex);
-    viewport.scrollTo({ left: targetLeft, behavior });
     setVisiblePageIndex((current) => (current === pageIndex ? current : pageIndex));
+    if (behavior === "auto") {
+      const targetLeft = getPageScrollLeft(pageIndex);
+      setPageTranslateX((current) => (Math.abs(current - targetLeft) < 1 ? current : targetLeft));
+    }
   }, [getPageScrollLeft]);
 
   useEffect(() => {
-    if (!followPlayback || pages.length === 0) {
+    if (pages.length === 0) {
+      setPageTranslateX(0);
       return;
     }
 
-    if (targetPageIndex !== visiblePageIndex) {
-      scrollToPage(targetPageIndex, "smooth");
+    let frame = 0;
+    const syncPageTranslate = () => {
+      const targetLeft = getPageScrollLeft(visiblePageIndex);
+      setPageTranslateX((current) => (Math.abs(current - targetLeft) < 1 ? current : targetLeft));
+    };
+
+    frame = requestAnimationFrame(syncPageTranslate);
+    window.addEventListener("resize", syncPageTranslate);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener("resize", syncPageTranslate);
+    };
+  }, [getPageScrollLeft, pages.length, visiblePageIndex]);
+
+  const alignViewportToPlayback = useCallback(
+    (pageIndex: number, layout: MeasureLayout, behavior: ScrollBehavior, forceCenter: boolean) => {
+      const viewport = viewportRef.current;
+      const board = boardRefs.current[pageIndex];
+      if (!viewport || !board) {
+        return;
+      }
+
+      const targetLeft = getPageScrollLeft(pageIndex);
+      const scaleY = board.clientHeight / PAGE_HEIGHT_PX;
+      const lineCenterY = ((layout.top + layout.bottom) / 2) * scaleY;
+      const boardRect = board.getBoundingClientRect();
+      const cursorDocumentY = boardRect.top + window.scrollY + lineCenterY;
+      const deadZoneTop = window.innerHeight * 0.2;
+      const deadZoneBottom = window.innerHeight * 0.8;
+      const cursorViewportY = cursorDocumentY - window.scrollY;
+      const needsHorizontal = pageIndex !== visiblePageIndex || Math.abs(pageTranslateX - targetLeft) > 2;
+
+      let targetTop = window.scrollY;
+      let needsVertical = false;
+
+      if (forceCenter) {
+        targetTop = Math.max(0, cursorDocumentY - window.innerHeight / 2);
+        needsVertical = Math.abs(targetTop - window.scrollY) > 2;
+      } else if (cursorViewportY < deadZoneTop) {
+        targetTop = Math.max(0, cursorDocumentY - deadZoneTop);
+        needsVertical = true;
+      } else if (cursorViewportY > deadZoneBottom) {
+        targetTop = Math.max(0, cursorDocumentY - deadZoneBottom);
+        needsVertical = true;
+      }
+
+      if (!needsHorizontal && !needsVertical) {
+        return;
+      }
+
+      autoScrollGuardUntilRef.current = performance.now() + AUTO_SCROLL_GUARD_MS;
+      if (needsHorizontal) {
+        scrollToPage(pageIndex, behavior);
+      }
+      if (needsVertical) {
+        window.scrollTo({ top: targetTop, behavior });
+      }
+      setVisiblePageIndex((current) => (current === pageIndex ? current : pageIndex));
+    },
+    [getPageScrollLeft, pageTranslateX, scrollToPage, visiblePageIndex],
+  );
+
+  useEffect(() => {
+    const followWasEnabled = previousFollowPlaybackRef.current;
+    previousFollowPlaybackRef.current = followPlayback;
+
+    if (!followPlayback || pages.length === 0 || !activeLayout) {
+      if (!followPlayback) {
+        forceCenterNextAlignRef.current = false;
+        lastFollowTargetKeyRef.current = null;
+      }
       return;
     }
 
-    if (activeLayout && activeLayout.pageIndex !== visiblePageIndex) {
-      scrollToPage(activeLayout.pageIndex, "smooth");
+    const followKey = `${activeLayout.pageIndex}:${activeLayout.top}`;
+    const followJustEnabled = !followWasEnabled && followPlayback;
+    const pageMismatch = visiblePageIndex !== targetPageIndex;
+    const lineMismatch = lastFollowTargetKeyRef.current !== followKey;
+    if (followJustEnabled || pageMismatch) {
+      forceCenterNextAlignRef.current = true;
     }
-  }, [activeLayout, followPlayback, pages.length, scrollToPage, targetPageIndex, visiblePageIndex]);
+    if (pageMismatch) {
+      scrollToPage(targetPageIndex, followJustEnabled ? "auto" : "smooth");
+      return;
+    }
+
+    if (!followJustEnabled && !lineMismatch && !forceCenterNextAlignRef.current) {
+      return;
+    }
+
+    lastFollowTargetKeyRef.current = followKey;
+    const forceCenter = forceCenterNextAlignRef.current;
+    forceCenterNextAlignRef.current = false;
+    const behavior: ScrollBehavior = followJustEnabled ? "auto" : "smooth";
+
+    let frame = 0;
+    frame = requestAnimationFrame(() => {
+      alignViewportToPlayback(targetPageIndex, activeLayout, behavior, forceCenter);
+    });
+
+    return () => cancelAnimationFrame(frame);
+  }, [activeLayout, alignViewportToPlayback, followPlayback, pages.length, scrollToPage, targetPageIndex, visiblePageIndex]);
 
   function handlePageNavigation(direction: -1 | 1) {
     const nextPageIndex = clamp(visiblePageIndex + direction, 0, Math.max(0, pages.length - 1));
@@ -445,7 +518,7 @@ export const DrumSheet = forwardRef<DrumSheetHandle, Props>(function DrumSheet(
           Prev
         </button>
         <div className="score-book-viewport" ref={viewportRef}>
-          <div className="score-page-strip">
+          <div className="score-page-strip" style={{ transform: `translate3d(-${pageTranslateX}px, 0, 0)` }}>
             {pages.map((page, pageIndex) => (
               <div
                 className="score-page-shell"
@@ -486,6 +559,18 @@ export const DrumSheet = forwardRef<DrumSheetHandle, Props>(function DrumSheet(
                         overlayLayerRefs.current[pageIndex] = node;
                       }}
                     >
+                      <div
+                        className="playback-follow-target"
+                        ref={(node) => {
+                          followTargetRefs.current[pageIndex] = node;
+                        }}
+                      />
+                      <div
+                        className="playback-measure-highlight"
+                        ref={(node) => {
+                          measureHighlightRefs.current[pageIndex] = node;
+                        }}
+                      />
                       <div
                         className="playback-slot-highlight"
                         ref={(node) => {
