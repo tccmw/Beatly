@@ -142,7 +142,7 @@ export default function Home() {
       const pdf = new jsPDF({
         compress: true,
         format: "a4",
-        orientation: "landscape",
+        orientation: "portrait",
         unit: "mm",
       });
       const pageWidth = pdf.internal.pageSize.getWidth();
@@ -160,7 +160,7 @@ export default function Home() {
         const requiredHeight = labelHeight + imageHeight + (index === systems.length - 1 ? 0 : gap);
 
         if (cursorY + requiredHeight > pageHeight - margin) {
-          pdf.addPage("a4", "landscape");
+          pdf.addPage("a4", "portrait");
           cursorY = margin;
         }
 
