@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { Articulation, Formatter, Renderer, Stave, StaveNote, Voice } from "vexflow";
 import type { AnalysisResult, DrumNote, EngravedMeasure, LyricWord, MidiTickEvent, ScoreEvent } from "@/lib/types";
 
@@ -45,6 +45,16 @@ type PlaybackPosition = {
   slot: number;
   slotProgress: number;
 };
+export type PrintableScoreSystem = {
+  height: number;
+  measureEnd: number;
+  measureStart: number;
+  svgMarkup: string;
+  width: number;
+};
+export type DrumSheetHandle = {
+  getPrintableSystems: () => PrintableScoreSystem[];
+};
 
 const NOTE_MAP: Record<DrumNote, { key: string; voice: VoiceNumber; notehead: "normal" | "x"; order: number }> = {
   crash: { key: "a/5", voice: 1, notehead: "x", order: 0 },
@@ -67,7 +77,10 @@ const LYRIC_FONT_SIZE = 12;
 const LYRIC_HORIZONTAL_PADDING_PX = 5;
 const LYRIC_MAX_ROWS = 2;
 
-export function DrumSheet({ audioCurrentTime = 0, onSeek, score, showLyrics = true }: Props) {
+export const DrumSheet = forwardRef<DrumSheetHandle, Props>(function DrumSheet(
+  { audioCurrentTime = 0, onSeek, score, showLyrics = true }: Props,
+  ref,
+) {
   const boardRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const svgLayerRef = useRef<HTMLDivElement | null>(null);
@@ -92,6 +105,14 @@ export function DrumSheet({ audioCurrentTime = 0, onSeek, score, showLyrics = tr
     : 0;
   const activeSlotLeft = activeLayout ? activeLayout.gridStartX + playbackPosition.slot * activeLayout.slotWidth : 0;
   const activeSlotHeight = activeLayout ? activeLayout.bottom - activeLayout.top : 0;
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      getPrintableSystems: () => collectPrintableSystems(svgLayerRef.current, measureLayouts),
+    }),
+    [measureLayouts],
+  );
 
   useEffect(() => {
     const container = svgLayerRef.current;
@@ -250,6 +271,85 @@ export function DrumSheet({ audioCurrentTime = 0, onSeek, score, showLyrics = tr
       </div>
     </div>
   );
+});
+
+function collectPrintableSystems(
+  container: HTMLDivElement | null,
+  layouts: MeasureLayout[],
+): PrintableScoreSystem[] {
+  const sourceSvg = container?.querySelector("svg");
+  if (!sourceSvg || !layouts.length) {
+    return [];
+  }
+
+  const parsedViewBox = parseSvgViewBox(sourceSvg.getAttribute("viewBox"));
+  const fullWidth = parsedViewBox?.width ?? svgDimension(sourceSvg, "width");
+  const fullHeight = parsedViewBox?.height ?? svgDimension(sourceSvg, "height");
+  const viewBoxX = parsedViewBox?.x ?? 0;
+  const viewBoxY = parsedViewBox?.y ?? 0;
+  if (fullWidth <= 0 || fullHeight <= 0) {
+    return [];
+  }
+
+  return groupLayoutsBySystem(layouts).map((group) => {
+    const top = Math.max(viewBoxY, Math.floor(Math.min(...group.map((layout) => layout.top)) - 8));
+    const bottom = Math.min(viewBoxY + fullHeight, Math.ceil(Math.max(...group.map((layout) => layout.bottom)) + 8));
+    const height = Math.max(1, bottom - top);
+    const clonedSvg = sourceSvg.cloneNode(true) as SVGSVGElement;
+    clonedSvg.setAttribute("width", String(fullWidth));
+    clonedSvg.setAttribute("height", String(height));
+    clonedSvg.setAttribute("viewBox", `${viewBoxX} ${top} ${fullWidth} ${height}`);
+
+    return {
+      height,
+      measureEnd: group[group.length - 1].measure,
+      measureStart: group[0].measure,
+      svgMarkup: clonedSvg.outerHTML,
+      width: fullWidth,
+    };
+  });
+}
+
+function groupLayoutsBySystem(layouts: MeasureLayout[]): MeasureLayout[][] {
+  const groups: MeasureLayout[][] = [];
+  layouts.forEach((layout) => {
+    const index = Math.max(0, Math.floor((layout.measure - 1) / MEASURES_PER_LINE));
+    if (!groups[index]) {
+      groups[index] = [];
+    }
+    groups[index].push(layout);
+  });
+  return groups.filter((group): group is MeasureLayout[] => Boolean(group?.length));
+}
+
+function svgDimension(svg: SVGSVGElement, attribute: "width" | "height"): number {
+  const raw = Number.parseFloat(svg.getAttribute(attribute) ?? "");
+  if (Number.isFinite(raw) && raw > 0) {
+    return raw;
+  }
+
+  const parsedViewBox = parseSvgViewBox(svg.getAttribute("viewBox"));
+  if (parsedViewBox) {
+    return attribute === "width" ? parsedViewBox.width : parsedViewBox.height;
+  }
+
+  return 0;
+}
+
+function parseSvgViewBox(value: string | null): { height: number; width: number; x: number; y: number } | null {
+  if (!value) {
+    return null;
+  }
+
+  const [x, y, width, height] = value
+    .trim()
+    .split(/[\s,]+/)
+    .map((part) => Number.parseFloat(part));
+  if (![x, y, width, height].every((part) => Number.isFinite(part))) {
+    return null;
+  }
+
+  return { x, y, width, height };
 }
 
 function simplifyVoice(measure: Measure, voice: VoiceNumber): DisplayTick[] {
