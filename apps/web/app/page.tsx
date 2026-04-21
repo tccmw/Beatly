@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { DrumSheet } from "@/components/DrumSheet";
+import { DrumSheet, type DrumSheetHandle, type PrintableScoreSystem } from "@/components/DrumSheet";
 import {
   SynchronizedScorePlayer,
   type PlaybackSource,
@@ -15,6 +15,7 @@ type SourceType = "upload" | "youtube";
 export default function Home() {
   const audioObjectUrlRef = useRef<string | null>(null);
   const playerRef = useRef<SynchronizedScorePlayerHandle | null>(null);
+  const sheetRef = useRef<DrumSheetHandle | null>(null);
   const [sourceType, setSourceType] = useState<SourceType>("upload");
   const [file, setFile] = useState<File | null>(null);
   const [youtubeUrl, setYoutubeUrl] = useState("");
@@ -22,6 +23,7 @@ export default function Home() {
   const [playbackSource, setPlaybackSource] = useState<PlaybackSource | null>(null);
   const [audioCurrentTime, setAudioCurrentTime] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
   const [enableLyrics, setEnableLyrics] = useState(true);
   const [showLyrics, setShowLyrics] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -121,6 +123,64 @@ export default function Home() {
     setAudioCurrentTime(time);
   }, []);
 
+  const handleExportPdf = useCallback(async () => {
+    if (!score) {
+      return;
+    }
+
+    playerRef.current?.pause();
+    const systems = sheetRef.current?.getPrintableSystems() ?? [];
+    if (!systems.length) {
+      setError("Score preview is not ready for PDF export yet.");
+      return;
+    }
+
+    setError(null);
+    setIsExporting(true);
+    try {
+      const { jsPDF } = await import("jspdf");
+      const pdf = new jsPDF({
+        compress: true,
+        format: "a4",
+        orientation: "landscape",
+        unit: "mm",
+      });
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const margin = 10;
+      const contentWidth = pageWidth - margin * 2;
+      const gap = 6;
+      let cursorY = margin;
+
+      for (let index = 0; index < systems.length; index += 1) {
+        const system = systems[index];
+        const raster = await rasterizeScoreSystem(system, 3);
+        const labelHeight = 4;
+        const imageHeight = contentWidth * (system.height / system.width);
+        const requiredHeight = labelHeight + imageHeight + (index === systems.length - 1 ? 0 : gap);
+
+        if (cursorY + requiredHeight > pageHeight - margin) {
+          pdf.addPage("a4", "landscape");
+          cursorY = margin;
+        }
+
+        pdf.setFontSize(9);
+        pdf.setTextColor(93, 102, 117);
+        pdf.text(`Measures ${system.measureStart}-${system.measureEnd}`, margin, cursorY + 3);
+        cursorY += labelHeight;
+
+        pdf.addImage(raster, "PNG", margin, cursorY, contentWidth, imageHeight, undefined, "FAST");
+        cursorY += imageHeight + gap;
+      }
+
+      pdf.save(buildPdfFilename(playbackSource?.title ?? (sourceType === "youtube" ? youtubeUrl.trim() : file?.name ?? "")));
+    } catch {
+      setError("Failed to generate the PDF file.");
+    } finally {
+      setIsExporting(false);
+    }
+  }, [file?.name, playbackSource?.title, score, sourceType, youtubeUrl]);
+
   return (
     <main className="page">
       <div className="shell">
@@ -174,6 +234,14 @@ export default function Home() {
               {isLoading ? "Analyzing..." : "Generate Score"}
             </button>
             <button
+              className="button"
+              disabled={!score || isLoading || isExporting}
+              onClick={handleExportPdf}
+              type="button"
+            >
+              {isExporting ? "Downloading PDF..." : "Export PDF"}
+            </button>
+            <button
               className={showLyrics ? "source-button active" : "source-button"}
               onClick={() => setShowLyrics((current) => !current)}
               type="button"
@@ -216,6 +284,7 @@ export default function Home() {
             <DrumSheet
               audioCurrentTime={audioCurrentTime}
               onSeek={handleScoreSeek}
+              ref={sheetRef}
               score={score}
               showLyrics={showLyrics}
             />
@@ -266,4 +335,53 @@ function formatJobStatus(status: string, detail?: string | null): string {
     return detail ?? "Analysis failed.";
   }
   return detail ?? "Working.";
+}
+
+async function rasterizeScoreSystem(system: PrintableScoreSystem, scale: number): Promise<string> {
+  const svgMarkup = ensureSvgNamespace(system.svgMarkup);
+  const svgBlob = new Blob([svgMarkup], { type: "image/svg+xml;charset=utf-8" });
+  const objectUrl = URL.createObjectURL(svgBlob);
+  try {
+    const image = await loadImage(objectUrl);
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(system.width * scale));
+    canvas.height = Math.max(1, Math.round(system.height * scale));
+    const context = canvas.getContext("2d");
+    if (!context) {
+      throw new Error("Canvas 2D context is unavailable.");
+    }
+
+    context.scale(scale, scale);
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, system.width, system.height);
+    context.drawImage(image, 0, 0, system.width, system.height);
+
+    return canvas.toDataURL("image/png");
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+function ensureSvgNamespace(svgMarkup: string): string {
+  if (svgMarkup.includes('xmlns="http://www.w3.org/2000/svg"')) {
+    return svgMarkup;
+  }
+  return svgMarkup.replace("<svg", '<svg xmlns="http://www.w3.org/2000/svg"');
+}
+
+function loadImage(source: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.decoding = "sync";
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("Failed to load the score image."));
+    image.src = source;
+  });
+}
+
+function buildPdfFilename(sourceTitle: string): string {
+  const trimmed = sourceTitle.trim();
+  const withoutExtension = trimmed.replace(/\.[A-Za-z0-9]{1,8}$/, "");
+  const cleaned = withoutExtension.replace(/[<>:"/\\|?*\u0000-\u001f]/g, " ").trim().replace(/\s+/g, "_");
+  return `${(cleaned || "beatly-drum-sheet").slice(0, 96)}.pdf`;
 }
