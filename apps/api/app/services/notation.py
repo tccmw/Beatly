@@ -666,24 +666,21 @@ def _rebalance_voice_to_4_4(ticks: list[EngravedTick], voice: int) -> list[Engra
 
 
 def _sanitize_lyric_slots(slots: list[LyricSlot]) -> list[LyricSlot]:
-    by_slot: dict[int, str] = {}
-    occupied: set[int] = set()
+    output: list[LyricSlot] = []
+    occupied: set[tuple[int, int]] = set()
     for slot in slots:
         index = min(SLOTS_PER_MEASURE - 1, max(0, slot.slot))
+        row = min(1, max(0, slot.row))
         text = unicodedata.normalize("NFC", slot.lyric.strip())
         if not text:
             continue
-        while index in occupied and index < SLOTS_PER_MEASURE - 1:
-            index += 1
-        if index in occupied:
-            continue
-        occupied.add(index)
-        by_slot[index] = text
+        while (index, row) in occupied and row < 1:
+            row += 1
+        position = (index, row)
+        occupied.add(position)
+        output.append(LyricSlot(slot=index, lyric=text, row=row))
 
-    return [
-        LyricSlot(slot=slot, lyric=lyric)
-        for slot, lyric in sorted(by_slot.items())
-    ]
+    return sorted(output, key=lambda slot: (slot.slot, slot.row, slot.lyric))
 
 
 def _engraved_slots_from_lyric_slots(lyric_slots: list[LyricSlot]) -> list[EngravedSlot]:

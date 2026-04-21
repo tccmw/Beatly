@@ -19,6 +19,7 @@ from app.models import AnalysisJobStatus, AnalysisResult, LyricWord
 from app.services.audio_preprocess import AudioPreprocessError, prepare_audio_for_analysis
 from app.services.drum_analysis import analyze_drum_track
 from app.services.drum_separation import DrumSeparationError, separate_stems_with_demucs
+from app.services.lyric_alignment import ALIGNMENT_VERSION, align_caption_words_to_whisper_timing
 from app.services.lyrics import preload_whisper_model, transcribe_words_with_whisper
 from app.services.notation import TICKS_PER_QUARTER, build_engraved_measures, build_midi_tick_list
 from app.services.score_merge import build_lyric_lane, merge_drums_and_lyrics
@@ -187,7 +188,7 @@ def _run_youtube_analysis_job(
                 youtube_source.caption_source,
                 len(caption_words),
             )
-            _update_job(job_id, status="running", detail="Using YouTube captions for lyrics.")
+            _update_job(job_id, status="running", detail="Aligning YouTube captions with Whisper timing.")
         else:
             logger.info("[%s] youtube captions unavailable; using existing lyric extraction path", job_id)
             if should_extract_lyrics:
@@ -200,6 +201,7 @@ def _run_youtube_analysis_job(
             should_extract_lyrics and not caption_words,
             progress=lambda detail: _update_job(job_id, status="running", detail=detail),
             provided_words=caption_words,
+            align_provided_lyrics_with_whisper=bool(caption_words),
             lyric_source_key=youtube_source.lyric_cache_key,
         )
     except YouTubeSourceError as exc:
@@ -221,6 +223,7 @@ def _run_analysis(
     should_extract_lyrics: bool,
     progress: Callable[[str], None] | None = None,
     provided_words: list[LyricWord] | None = None,
+    align_provided_lyrics_with_whisper: bool = False,
     lyric_source_key: str | None = None,
 ) -> AnalysisResult:
     settings = get_settings()
@@ -229,19 +232,22 @@ def _run_analysis(
     upload_hash = _file_sha256(upload_path)
     has_provided_lyrics = bool(provided_words)
     needs_whisper_lyrics = should_extract_lyrics and not has_provided_lyrics
+    needs_whisper_alignment = has_provided_lyrics and align_provided_lyrics_with_whisper
+    needs_whisper_timing = needs_whisper_lyrics or needs_whisper_alignment
     has_any_lyrics = should_extract_lyrics or has_provided_lyrics
     demucs_mode = _demucs_mode_for_request(
         settings.demucs_mode,
-        needs_whisper_lyrics,
+        needs_whisper_timing,
         settings.force_vocals_for_lyrics,
     )
-    whisper_model = _korean_whisper_model(settings.whisper_model) if needs_whisper_lyrics else settings.whisper_model
+    whisper_model = _korean_whisper_model(settings.whisper_model) if needs_whisper_timing else settings.whisper_model
     cache_key = _analysis_cache_key(
         upload_hash,
         has_any_lyrics,
         demucs_mode,
         whisper_model,
         settings,
+        alignment_mode=ALIGNMENT_VERSION if needs_whisper_alignment else None,
         lyric_source_key=lyric_source_key,
     )
     if cached_result := _load_cached_analysis(settings.analysis_cache_dir, cache_key):
@@ -250,7 +256,7 @@ def _run_analysis(
         return cached_result
 
     if (
-        needs_whisper_lyrics
+        needs_whisper_timing
         and settings.whisper_engine.strip().lower() in {"faster-whisper", "faster_whisper", "ctranslate2", "ct2"}
     ):
         _report_progress(progress, "Preparing Korean lyric model cache.")
@@ -284,7 +290,7 @@ def _run_analysis(
         stems.drums,
         stems.vocals,
         settings.separated_dir / upload_path.stem / "prepared",
-        include_vocals=needs_whisper_lyrics,
+        include_vocals=needs_whisper_timing,
     )
     logger.info("[%s] audio preprocessing finished in %.1fs", request_id, time.perf_counter() - step_started)
 
@@ -299,7 +305,41 @@ def _run_analysis(
         len(drum_events),
     )
 
-    if has_provided_lyrics:
+    if has_provided_lyrics and needs_whisper_alignment:
+        step_started = time.perf_counter()
+        _report_progress(progress, "Aligning YouTube captions to vocal timing with Whisper.")
+        logger.info(
+            "[%s] whisper timing alignment started engine=%s model=%s device=%s compute_type=%s beam_size=%d language=ko word_timestamps=True",
+            request_id,
+            settings.whisper_engine,
+            whisper_model,
+            settings.whisper_device,
+            settings.whisper_compute_type,
+            settings.whisper_beam_size,
+        )
+        whisper_words = transcribe_words_with_whisper(
+            prepared_audio.vocals,
+            model_name=whisper_model,
+            engine=settings.whisper_engine,
+            device=settings.whisper_device,
+            compute_type=settings.whisper_compute_type,
+            beam_size=settings.whisper_beam_size,
+            vad_filter=settings.whisper_vad_filter,
+            download_root=settings.whisper_download_root,
+            allow_openai_fallback=settings.whisper_openai_fallback,
+            use_stub=settings.use_stubs,
+            language="ko",
+            word_timestamps=True,
+        )
+        words = align_caption_words_to_whisper_timing(provided_words or [], whisper_words, prepared_audio.vocals)
+        logger.info(
+            "[%s] caption/whisper alignment finished in %.1fs with %d caption units and %d aligned units",
+            request_id,
+            time.perf_counter() - step_started,
+            len(provided_words or []),
+            len(words),
+        )
+    elif has_provided_lyrics:
         words = sorted(provided_words, key=lambda item: (item.start, item.end))
         logger.info("[%s] lyric transcription skipped because %d caption words were provided", request_id, len(words))
     elif needs_whisper_lyrics:
@@ -446,9 +486,11 @@ def _analysis_cache_key(
     demucs_mode: str,
     whisper_model: str,
     settings: object,
+    alignment_mode: str | None = None,
     lyric_source_key: str | None = None,
 ) -> str:
     payload = {
+        "alignment_mode": alignment_mode,
         "audio_sha256": upload_hash,
         "demucs_device": getattr(settings, "demucs_device", None),
         "demucs_mode": demucs_mode,

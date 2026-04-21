@@ -58,6 +58,7 @@ export type EngravedTick = {
 export type LyricSlot = {
   slot: number;
   lyric: string;
+  row?: number;
 };
 
 export type EngravedSlot = {

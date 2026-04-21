@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import unicodedata
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -16,8 +17,12 @@ from app.models import LyricWord
 logger = logging.getLogger("uvicorn.error")
 
 CAPTION_MIN_DURATION_SECONDS = 0.1
-CAPTION_LAYOUT_VERSION = "youtube-caption-grid-v2"
+CAPTION_LAYOUT_VERSION = "youtube-whisper-alignment-v2"
 CAPTION_ROLLING_OVERLAP_SECONDS = 0.75
+CAPTION_DOWNLOAD_CHUNK_BYTES = 1024 * 1024
+CAPTION_DOWNLOAD_TIMEOUT_SECONDS = 60
+CAPTION_FORMAT_PRIORITY = ("json3", "vtt", "srv3", "srv2", "srv1", "ttml", "xml")
+CAPTION_LANGUAGE_PRIORITY = ("ko", "en")
 USER_AGENT = "Beatly/0.1 (+https://localhost)"
 YOUTUBE_HOST_PATTERN = re.compile(r"(youtube\.com|youtu\.be|music\.youtube\.com)", re.IGNORECASE)
 VTT_TIME_PATTERN = re.compile(
@@ -108,6 +113,7 @@ def _extract_info(url: str) -> dict[str, Any]:
     options: dict[str, Any] = {
         "quiet": True,
         "no_warnings": True,
+        "listsubtitles": True,
         "noplaylist": True,
         "skip_download": True,
         "retries": 3,
@@ -162,15 +168,7 @@ def _download_audio(url: str, output_dir: Path) -> Path:
 
 
 def _fetch_best_caption(info: dict[str, Any]) -> tuple[str, str, str] | None:
-    candidates = [
-        ("official", info.get("subtitles") or {}),
-        ("auto", info.get("automatic_captions") or {}),
-    ]
-    for source_kind, tracks in candidates:
-        selected = _select_caption_track(tracks)
-        if selected is None:
-            continue
-        language, caption_format = selected
+    for source_kind, language, caption_format in _iter_caption_candidates(info):
         caption_url = str(caption_format.get("url") or "")
         caption_ext = str(caption_format.get("ext") or "").lower()
         if not caption_url:
@@ -178,48 +176,101 @@ def _fetch_best_caption(info: dict[str, Any]) -> tuple[str, str, str] | None:
         try:
             payload = _download_text(caption_url)
         except Exception:
-            logger.exception("Could not fetch YouTube caption language=%s source=%s", language, source_kind)
+            logger.exception(
+                "Could not fetch YouTube caption source=%s language=%s format=%s; trying next format",
+                source_kind,
+                language,
+                caption_ext,
+            )
+            continue
+        cues = _parse_caption_payload(payload, caption_ext)
+        if not cues:
+            logger.warning(
+                "YouTube caption source=%s language=%s format=%s had no parseable cues; trying next format",
+                source_kind,
+                language,
+                caption_ext,
+            )
             continue
         return f"{source_kind}:{language}", payload, caption_ext
     return None
 
 
-def _select_caption_track(tracks: dict[str, list[dict[str, Any]]]) -> tuple[str, dict[str, Any]] | None:
-    if not tracks:
-        return None
-
-    languages = list(tracks.keys())
-    preferred_languages = [
-        language for language in languages if language.lower() in {"ko", "ko-kr"} or language.lower().startswith("ko-")
-    ]
-    preferred_languages.extend(language for language in languages if language not in preferred_languages)
-
-    for language in preferred_languages:
-        formats = tracks.get(language) or []
-        selected_format = _select_caption_format(formats)
-        if selected_format is not None:
-            return language, selected_format
-    return None
+def _iter_caption_candidates(info: dict[str, Any]) -> list[tuple[str, str, dict[str, Any]]]:
+    official_tracks = info.get("subtitles") or {}
+    automatic_tracks = info.get("automatic_captions") or {}
+    candidates: list[tuple[str, str, dict[str, Any]]] = []
+    candidates.extend(_caption_candidates_for_tracks("official", official_tracks))
+    candidates.extend(_caption_candidates_for_tracks("auto", automatic_tracks))
+    return candidates
 
 
-def _select_caption_format(formats: list[dict[str, Any]]) -> dict[str, Any] | None:
-    for preferred_ext in ("vtt", "json3", "srv3", "ttml"):
-        for caption_format in formats:
-            if str(caption_format.get("ext") or "").lower() == preferred_ext:
-                return caption_format
-    return formats[0] if formats else None
+def _caption_candidates_for_tracks(
+    source_kind: str,
+    tracks: dict[str, list[dict[str, Any]]],
+) -> list[tuple[str, str, dict[str, Any]]]:
+    candidates: list[tuple[str, str, dict[str, Any]]] = []
+    for language in _ordered_caption_languages(tracks):
+        for caption_format in _ordered_caption_formats(tracks.get(language) or []):
+            candidates.append((source_kind, language, caption_format))
+    return candidates
+
+
+def _ordered_caption_languages(tracks: dict[str, list[dict[str, Any]]]) -> list[str]:
+    languages = [language for language in tracks if _is_supported_caption_language(language)]
+    return sorted(languages, key=_caption_language_rank)
+
+
+def _is_supported_caption_language(language: str) -> bool:
+    normalized = language.lower()
+    return any(normalized == code or normalized.startswith(f"{code}-") for code in CAPTION_LANGUAGE_PRIORITY)
+
+
+def _caption_language_rank(language: str) -> tuple[int, str]:
+    normalized = language.lower()
+    for index, code in enumerate(CAPTION_LANGUAGE_PRIORITY):
+        if normalized == code or normalized.startswith(f"{code}-"):
+            return index, normalized
+    return len(CAPTION_LANGUAGE_PRIORITY), normalized
+
+
+def _ordered_caption_formats(formats: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: dict[str, dict[str, Any]] = {}
+    for caption_format in formats:
+        key = str(caption_format.get("url") or id(caption_format))
+        deduped.setdefault(key, caption_format)
+
+    def format_rank(caption_format: dict[str, Any]) -> tuple[int, str]:
+        ext = str(caption_format.get("ext") or "").lower()
+        try:
+            index = CAPTION_FORMAT_PRIORITY.index(ext)
+        except ValueError:
+            index = len(CAPTION_FORMAT_PRIORITY)
+        return index, ext
+
+    return sorted(deduped.values(), key=format_rank)
 
 
 def _download_text(url: str) -> str:
     request = Request(url, headers={"User-Agent": USER_AGENT})
-    with urlopen(request, timeout=20) as response:
+    chunks: list[bytes] = []
+    with urlopen(request, timeout=CAPTION_DOWNLOAD_TIMEOUT_SECONDS) as response:
         charset = response.headers.get_content_charset() or "utf-8"
-        return response.read().decode(charset, errors="replace")
+        while True:
+            chunk = response.read(CAPTION_DOWNLOAD_CHUNK_BYTES)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        return b"".join(chunks).decode(charset, errors="replace")
 
 
 def _parse_caption_payload(payload: str, caption_ext: str) -> list[CaptionCue]:
     if caption_ext == "json3" or payload.lstrip().startswith("{"):
         return _parse_json3_captions(payload)
+    if caption_ext in {"srv1", "srv2", "srv3"} or payload.lstrip().startswith("<transcript"):
+        return _parse_srv_captions(payload)
+    if caption_ext in {"ttml", "xml"} or payload.lstrip().startswith("<tt"):
+        return _parse_ttml_captions(payload)
     return _parse_vtt_captions(payload)
 
 
@@ -264,6 +315,64 @@ def _parse_vtt_captions(payload: str) -> list[CaptionCue]:
     return cues
 
 
+def _parse_srv_captions(payload: str) -> list[CaptionCue]:
+    try:
+        root = ET.fromstring(payload)
+    except ET.ParseError:
+        return []
+
+    cues: list[CaptionCue] = []
+    for element in root.iter():
+        if _xml_tag_name(element.tag) != "text":
+            continue
+        raw_text = "".join(element.itertext())
+        if not raw_text.strip():
+            continue
+        start = _xml_time_to_seconds(element.attrib.get("start", "0"))
+        duration = _xml_time_to_seconds(element.attrib.get("dur", str(CAPTION_MIN_DURATION_SECONDS)))
+        cues.append(CaptionCue(start=start, end=start + max(duration, CAPTION_MIN_DURATION_SECONDS), text=raw_text))
+    return cues
+
+
+def _parse_ttml_captions(payload: str) -> list[CaptionCue]:
+    try:
+        root = ET.fromstring(payload)
+    except ET.ParseError:
+        return []
+
+    cues: list[CaptionCue] = []
+    for element in root.iter():
+        if _xml_tag_name(element.tag) != "p":
+            continue
+        raw_text = " ".join(text.strip() for text in element.itertext() if text.strip())
+        if not raw_text:
+            continue
+        begin = _xml_time_to_seconds(element.attrib.get("begin", element.attrib.get("start", "0")))
+        if "end" in element.attrib:
+            end = _xml_time_to_seconds(element.attrib["end"])
+        else:
+            end = begin + _xml_time_to_seconds(element.attrib.get("dur", str(CAPTION_MIN_DURATION_SECONDS)))
+        cues.append(CaptionCue(start=begin, end=max(end, begin + CAPTION_MIN_DURATION_SECONDS), text=raw_text))
+    return cues
+
+
+def _xml_tag_name(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1]
+
+
+def _xml_time_to_seconds(value: str) -> float:
+    raw = value.strip()
+    if not raw:
+        return 0.0
+    if raw.endswith("ms"):
+        return float(raw[:-2]) / 1000
+    if raw.endswith("s"):
+        return float(raw[:-1])
+    if ":" in raw:
+        return _parse_vtt_time(raw.replace(",", "."))
+    return float(raw)
+
+
 def _parse_vtt_time(value: str) -> float:
     parts = value.split(":")
     if len(parts) == 3:
@@ -302,15 +411,11 @@ def _caption_cues_to_words(cues: list[CaptionCue]) -> list[LyricWord]:
             previous_units = raw_units
             previous_end = max(previous_end, cue.end)
             continue
-        duration = max(cue.end - start_base, CAPTION_MIN_DURATION_SECONDS * len(units))
-        step = duration / len(units)
-        for index, unit in enumerate(units):
-            start = start_base + index * step
-            end = start_base + (index + 1) * step
-            words.append(_lyric_word(unit, start, end))
+        for unit in units:
+            words.append(_lyric_word(unit, start_base, cue.end))
         previous_units = raw_units
         previous_end = max(previous_end, cue.end)
-    return _sanitize_word_timeline(words)
+    return words
 
 
 def _clean_caption_text(text: str) -> str:

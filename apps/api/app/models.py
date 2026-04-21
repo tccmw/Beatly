@@ -65,6 +65,7 @@ class EngravedTick(BaseModel):
 class LyricSlot(BaseModel):
     slot: int
     lyric: str
+    row: int = 0
 
 
 class EngravedSlot(BaseModel):
