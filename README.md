@@ -85,9 +85,29 @@ py -3 harness\beatly_quality_harness.py
 python harness\beatly_quality_harness.py
 ```
 
-The harness checks PAS drum mapping, voice separation, 16th-note quantization,
-lyric-slot preservation, playable hand/bass constraints, and Whisper model
-caching expectations.
+You can also run the suites separately:
+
+```powershell
+py -3 harness\beatly_quality_harness.py --suite common
+py -3 harness\beatly_quality_harness.py --suite instrument --instrument snare
+```
+
+If Python is not installed on the host, run the harness inside the API container:
+
+```powershell
+docker compose exec -T api python /app/harness/beatly_quality_harness.py
+```
+
+The harness is split into two layers:
+
+- Common harness: rules shared by every instrument family.
+- Instrument harness: per-instrument backend/frontend mapping checks.
+
+The current Beatly harness checks PAS drum mapping, voice separation,
+16th-note quantization, lyric-slot preservation, playable hand/bass
+constraints, frontend `DrumSheet.tsx` mapping alignment, and Whisper model
+caching expectations. Instrument specs live in
+`harness/instrument_specs.py`.
 
 ## Notes
 

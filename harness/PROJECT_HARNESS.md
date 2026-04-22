@@ -69,12 +69,25 @@
 
 ## Executable Harness
 
+- Common harness: validates rules shared by every instrument.
+- Instrument harness: validates each instrument mapping and display contract.
+- Instrument specs live in `harness/instrument_specs.py`.
+
 실행 가능한 검증 스크립트는 `harness/beatly_quality_harness.py`에 있다.
 
 ```powershell
 py -3 harness\beatly_quality_harness.py
 # 또는 Python이 `python` 명령으로 설치된 환경:
 python harness\beatly_quality_harness.py
+```
+
+```powershell
+py -3 harness\beatly_quality_harness.py --suite common
+py -3 harness\beatly_quality_harness.py --suite instrument --instrument snare
+```
+
+```powershell
+docker compose exec -T api python /app/harness/beatly_quality_harness.py
 ```
 
 이 스크립트는 현재 백엔드 표기 로직을 대상으로 다음 회귀 케이스를 검사한다.

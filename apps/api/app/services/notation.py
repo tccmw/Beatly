@@ -21,7 +21,7 @@ SLOTS_PER_MEASURE = 16
 CLUSTER_WINDOW_SECONDS = 0.02
 VELOCITY_FLOOR_RATIO = 0.3
 CYMBALS: set[DrumNote] = {"hihat_closed", "hihat_open", "ride", "crash"}
-HAND_DRUMS: set[DrumNote] = {*CYMBALS, "snare"}
+HAND_DRUMS: set[DrumNote] = {*CYMBALS, "snare", "tom"}
 FINAL_DRUMS: set[DrumNote] = {*HAND_DRUMS, "kick"}
 BACKBEAT_SLOTS = (4, 12)
 DEFAULT_KICK_SLOTS = (0, 8)
@@ -403,10 +403,11 @@ def _limit_hand_polyphony(
     result = dict(by_slot)
     hand_priority: dict[DrumNote, int] = {
         "snare": 0,
-        "hihat_closed": 1,
-        "hihat_open": 2,
-        "ride": 3,
-        "crash": 4,
+        "tom": 1,
+        "hihat_closed": 2,
+        "hihat_open": 3,
+        "ride": 4,
+        "crash": 5,
         "kick": 9,
     }
 
