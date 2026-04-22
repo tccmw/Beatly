@@ -75,6 +75,14 @@ const NOTE_MAP: Record<DrumNote, { key: string; voice: VoiceNumber; notehead: "n
   tom: { key: "e/5", voice: 1, notehead: "normal", order: 5 },
   kick: { key: "f/4", voice: 2, notehead: "normal", order: 6 },
 };
+const STAFF_KEY_DISPLAY_LINES: Record<string, number> = {
+  "a/5": -1.5,
+  "g/5": -1,
+  "f/5": -0.5,
+  "e/5": 0.5,
+  "c/5": 1.5,
+  "f/4": 3.5,
+};
 
 const PAGE_HEIGHT_PX = 1123;
 const PAGE_PADDING_X = 24;
@@ -100,9 +108,7 @@ const LOWER_STEM_LENGTH_PX = 26;
 const X_NOTEHEAD_SIZE_PX = 5.5;
 const ROUND_NOTEHEAD_RADIUS_X_PX = 6.5;
 const ROUND_NOTEHEAD_RADIUS_Y_PX = 4.8;
-const CYMBAL_LAYER_OFFSET_PX = 15;
-const STAFF_CENTER_LINE = 2;
-const KICK_DISPLAY_LINE = 3.5;
+const UPPER_VOICE_LEFT_SHIFT_PX = 5;
 
 export const DrumSheet = forwardRef<DrumSheetHandle, Props>(function DrumSheet(
   { audioCurrentTime = 0, followPlayback = true, isPlaying = false, onFollowPlaybackChange, onSeek, score, showLyrics = true }: Props,
@@ -842,7 +848,7 @@ function drawCustomUpperVoiceGeometry(
     const cymbalY = cymbalEvent ? resolveNoteY(note, cymbalEvent.staff_key) : null;
     const visibleHeadYs = [roundY, cymbalY].filter((value): value is number => value !== null);
     if (visibleHeadYs.length > 0) {
-      const stemX = note.getStemX();
+      const stemX = note.getStemX() - UPPER_VOICE_LEFT_SHIFT_PX;
       const topHeadY = Math.min(...visibleHeadYs);
       const bottomHeadY = Math.max(...visibleHeadYs);
       const stemEndY = beamedStemTargets.get(note) ?? topHeadY - UPPER_STEM_LENGTH_PX;
@@ -851,13 +857,13 @@ function drawCustomUpperVoiceGeometry(
 
     if (drumEvent) {
       if (roundY !== null) {
-        drawRoundNotehead(context, note.getStemX() - ROUND_NOTEHEAD_RADIUS_X_PX, roundY);
+        drawRoundNotehead(context, note.getStemX() - ROUND_NOTEHEAD_RADIUS_X_PX - UPPER_VOICE_LEFT_SHIFT_PX, roundY);
       }
     }
 
     if (cymbalEvent) {
       if (cymbalY !== null) {
-        drawXNotehead(context, note.getStemX() - X_NOTEHEAD_SIZE_PX, cymbalY);
+        drawXNotehead(context, note.getStemX() - X_NOTEHEAD_SIZE_PX - UPPER_VOICE_LEFT_SHIFT_PX, cymbalY);
       }
     }
   });
@@ -1016,8 +1022,9 @@ function drawStraightBeams(
 
     const first = visible[0].note;
     const last = visible[visible.length - 1].note;
-    const x1 = first.getStemX();
-    const x2 = last.getStemX();
+    const xOffset = voice === 1 ? UPPER_VOICE_LEFT_SHIFT_PX : 0;
+    const x1 = first.getStemX() - xOffset;
+    const x2 = last.getStemX() - xOffset;
     const beamY = unifiedBeamY(visible, voice, group.layer);
     const beamCount = group.ticks.some((tick) => !tick.hiddenRest && tick.duration === "16") ? 2 : 1;
 
@@ -1038,10 +1045,13 @@ function unifiedBeamY(
   layer: InstrumentLayer,
 ): number {
   if (voice === 1) {
-    const highestHeadY =
-      layer === "CYMBAL"
-        ? (visible[0]?.note.getStave()?.getYForLine(0) ?? 0) - CYMBAL_LAYER_OFFSET_PX
-        : visible[0]?.note.getStave()?.getYForLine(STAFF_CENTER_LINE) ?? Math.min(...visible.flatMap(({ note }) => note.getYs()));
+    const displayedHeadYs = visible.flatMap(({ note, tick }) =>
+      tick.events
+        .filter((event) => (layer === "CYMBAL" ? event.notehead === "x" : event.notehead === "normal"))
+        .map((event) => resolveNoteY(note, event.staff_key))
+        .filter((value): value is number => value !== null),
+    );
+    const highestHeadY = displayedHeadYs.length > 0 ? Math.min(...displayedHeadYs) : Math.min(...visible.flatMap(({ note }) => note.getYs()));
     const clearance = layer === "CYMBAL" ? CYMBAL_BEAM_CLEARANCE_PX : DRUM_BEAM_CLEARANCE_PX;
     return highestHeadY - clearance;
   }
@@ -1162,7 +1172,7 @@ function drawHiHatStateMarks(
     }
 
     const y = resolveNoteY(note, event.staff_key) ?? note.getYs()[0] ?? 0;
-    const x = note.getStemX() - X_NOTEHEAD_SIZE_PX;
+    const x = note.getStemX() - X_NOTEHEAD_SIZE_PX - UPPER_VOICE_LEFT_SHIFT_PX;
     const mark = event.articulation === "open" ? "o" : "+";
     context.save();
     context.setFont("Arial", 11);
@@ -1184,7 +1194,7 @@ function drawGhostSnareMarks(
   }
 
   const y = resolveNoteY(note, ghostSnare.staff_key) ?? note.getYs()[0] ?? 0;
-  const x = note.getStemX() - ROUND_NOTEHEAD_RADIUS_X_PX;
+  const x = note.getStemX() - ROUND_NOTEHEAD_RADIUS_X_PX - UPPER_VOICE_LEFT_SHIFT_PX;
   context.save();
   context.setFont("Arial, Malgun Gothic, sans-serif", 13);
   context.fillText("(", x - 12, y + 4);
@@ -1257,16 +1267,9 @@ function resolveMappedStaffKeyY(note: StaveNote, staffKey: string): number | nul
     return null;
   }
 
-  if (staffKey === "a/5" || staffKey === "g/5" || staffKey === "f/5") {
-    return stave.getYForLine(0) - CYMBAL_LAYER_OFFSET_PX;
-  }
-
-  if (staffKey === "c/5" || staffKey === "e/5") {
-    return stave.getYForLine(STAFF_CENTER_LINE);
-  }
-
-  if (staffKey === "f/4") {
-    return stave.getYForLine(KICK_DISPLAY_LINE);
+  const displayLine = STAFF_KEY_DISPLAY_LINES[staffKey];
+  if (displayLine !== undefined) {
+    return stave.getYForLine(displayLine);
   }
 
   return null;
