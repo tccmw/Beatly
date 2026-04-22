@@ -29,6 +29,7 @@ type SlotLyric = {
   row: number;
 };
 type Measure = { slots: MeasureSlot[] };
+type InstrumentLayer = "CYMBAL" | "DRUM";
 type DisplayTick = {
   slot: number;
   duration: "q" | "8" | "16";
@@ -89,6 +90,12 @@ const LYRIC_FONT_SIZE = 12;
 const LYRIC_HORIZONTAL_PADDING_PX = 5;
 const LYRIC_MAX_ROWS = 2;
 const AUTO_SCROLL_GUARD_MS = 1000;
+const BEAM_THICKNESS_PX = 4;
+const BEAM_SECONDARY_GAP_PX = 6;
+const MIN_BEAMED_STEM_LENGTH_PX = 28;
+const CYMBAL_BEAM_CLEARANCE_PX = 34;
+const DRUM_BEAM_CLEARANCE_PX = 26;
+const MIXED_HEAD_X_OFFSET_PX = 10;
 
 export const DrumSheet = forwardRef<DrumSheetHandle, Props>(function DrumSheet(
   { audioCurrentTime = 0, followPlayback = true, isPlaying = false, onFollowPlaybackChange, onSeek, score, showLyrics = true }: Props,
@@ -112,6 +119,7 @@ export const DrumSheet = forwardRef<DrumSheetHandle, Props>(function DrumSheet(
   const previousFollowPlaybackRef = useRef(followPlayback);
   const [measureLayouts, setMeasureLayouts] = useState<MeasureLayout[]>([]);
   const [pageTranslateX, setPageTranslateX] = useState(0);
+  const [renderError, setRenderError] = useState<string | null>(null);
   const [visiblePageIndex, setVisiblePageIndex] = useState(0);
   const measures = useMemo(() => toMeasures(score), [score]);
   const lineHeight = showLyrics ? LINE_HEIGHT_WITH_LYRICS : LINE_HEIGHT_WITHOUT_LYRICS;
@@ -164,72 +172,89 @@ export const DrumSheet = forwardRef<DrumSheetHandle, Props>(function DrumSheet(
 
   useEffect(() => {
     const nextLayouts: MeasureLayout[] = [];
-
-    pages.forEach((page, pageIndex) => {
-      const container = svgLayerRefs.current[pageIndex];
-      if (!container) {
-        return;
-      }
-
-      container.innerHTML = "";
-
-      const renderer = new Renderer(container, Renderer.Backends.SVG);
-      renderer.resize(PAGE_WIDTH_PX, PAGE_HEIGHT_PX);
-
-      const context = renderer.getContext();
-      context.setFont("Arial, Malgun Gothic, sans-serif", 12);
-
-      page.measures.forEach((measure, localIndex) => {
-        const globalIndex = page.measureStart - 1 + localIndex;
-        const column = localIndex % measuresPerLine;
-        const row = Math.floor(localIndex / measuresPerLine);
-        const x = PAGE_PADDING_X + column * measureWidth;
-        const y = PAGE_PADDING_Y + row * lineHeight;
-        const staveWidth = measureWidth;
-
-        const stave = new Stave(x, y, staveWidth);
-        if (localIndex === 0) {
-          stave.addClef("percussion").addTimeSignature("4/4");
+    try {
+      pages.forEach((page, pageIndex) => {
+        const container = svgLayerRefs.current[pageIndex];
+        if (!container) {
+          return;
         }
-        stave.setContext(context).draw();
-        drawMeasureNumber(context, globalIndex + 1, x, y);
 
-        const upperTicks = simplifyVoice(measure, 1);
-        const lowerTicks = simplifyVoice(measure, 2);
-        const upperNotes = upperTicks.map((tick) => makeVoiceNote(tick, 1));
-        const lowerNotes = lowerTicks.map((tick) => makeVoiceNote(tick, 2));
-        const upperVoice = new Voice({ num_beats: 4, beat_value: 4 }).setStrict(true);
-        const lowerVoice = new Voice({ num_beats: 4, beat_value: 4 }).setStrict(true);
+        container.innerHTML = "";
 
-        upperVoice.addTickables(upperNotes);
-        lowerVoice.addTickables(lowerNotes);
+        const renderer = new Renderer(container, Renderer.Backends.SVG);
+        renderer.resize(PAGE_WIDTH_PX, PAGE_HEIGHT_PX);
 
-        const formatterWidth = staveWidth - (localIndex === 0 ? FIRST_MEASURE_RESERVE_PX : REGULAR_MEASURE_RESERVE_PX);
-        new Formatter().joinVoices([upperVoice, lowerVoice]).format([upperVoice, lowerVoice], formatterWidth);
+        const context = renderer.getContext();
+        context.setFont("Arial, Malgun Gothic, sans-serif", 12);
 
-        prepareStraightBeamStems(upperNotes, upperTicks, 1);
+        page.measures.forEach((measure, localIndex) => {
+          const globalIndex = page.measureStart - 1 + localIndex;
+          const column = localIndex % measuresPerLine;
+          const row = Math.floor(localIndex / measuresPerLine);
+          const x = PAGE_PADDING_X + column * measureWidth;
+          const y = PAGE_PADDING_Y + row * lineHeight;
+          const staveWidth = measureWidth;
 
-        upperVoice.draw(context, stave);
-        lowerVoice.draw(context, stave);
+          const stave = new Stave(x, y, staveWidth);
+          if (localIndex === 0) {
+            stave.addClef("percussion").addTimeSignature("4/4");
+          }
+          stave.setContext(context).draw();
+          drawMeasureNumber(context, globalIndex + 1, x, y);
 
-        drawStraightBeams(context, upperNotes, upperTicks, 1);
-        drawCustomXNoteheads(context, upperNotes, upperTicks);
+          const upperTicks = simplifyVoice(measure, 1);
+          const lowerTicks = simplifyVoice(measure, 2);
+          const upperNotes = upperTicks.map((tick) => makeVoiceNote(tick, 1));
+          const lowerNotes = lowerTicks.map((tick) => makeVoiceNote(tick, 2));
+          const upperVoice = new Voice({ num_beats: 4, beat_value: 4 }).setStrict(true);
+          const lowerVoice = new Voice({ num_beats: 4, beat_value: 4 }).setStrict(true);
 
-        upperTicks.forEach((tick, tickIndex) => {
-          drawHiHatStateMarks(context, upperNotes[tickIndex], tick);
-          drawGhostSnareMarks(context, upperNotes[tickIndex], tick);
+          upperVoice.addTickables(upperNotes);
+          lowerVoice.addTickables(lowerNotes);
+
+          const formatterWidth = staveWidth - (localIndex === 0 ? FIRST_MEASURE_RESERVE_PX : REGULAR_MEASURE_RESERVE_PX);
+          new Formatter().joinVoices([upperVoice, lowerVoice]).format([upperVoice, lowerVoice], formatterWidth);
+
+          configureVoiceFlags(upperNotes, upperTicks, 1);
+          configureVoiceFlags(lowerNotes, lowerTicks, 2);
+          prepareStraightBeamStems(upperNotes, upperTicks, 1);
+
+          upperVoice.draw(context, stave);
+          lowerVoice.draw(context, stave);
+
+          drawStraightBeams(context, upperNotes, upperTicks, 1);
+          drawCustomXNoteheads(context, upperNotes, upperTicks);
+
+          upperTicks.forEach((tick, tickIndex) => {
+            drawHiHatStateMarks(context, upperNotes[tickIndex], tick);
+            drawGhostSnareMarks(context, upperNotes[tickIndex], tick);
+          });
+          if (showLyrics) {
+            drawLyricLane(context, stave, measure);
+          }
+          nextLayouts[globalIndex] = measureLayoutFromStave(stave, globalIndex + 1, pageIndex, showLyrics);
         });
-        if (showLyrics) {
-          drawLyricLane(context, stave, measure);
-        }
-        nextLayouts[globalIndex] = measureLayoutFromStave(stave, globalIndex + 1, pageIndex, showLyrics);
       });
-    });
 
-    setMeasureLayouts(nextLayouts);
+      setRenderError(null);
+      setMeasureLayouts(nextLayouts);
+    } catch (error) {
+      console.error("DrumSheet render failed", error);
+      svgLayerRefs.current.forEach((container) => {
+        if (container) {
+          container.innerHTML = "";
+        }
+      });
+      setMeasureLayouts([]);
+      setRenderError(error instanceof Error ? error.message : "Drum sheet rendering failed.");
+    }
   }, [lineHeight, measureWidth, measuresPerLine, pages, showLyrics]);
 
   useEffect(() => {
+    if (renderError) {
+      return;
+    }
+
     let frame = 0;
     frame = requestAnimationFrame(() => {
       const activePageIndex = activeLayout?.pageIndex ?? -1;
@@ -301,7 +326,7 @@ export const DrumSheet = forwardRef<DrumSheetHandle, Props>(function DrumSheet(
     });
 
     return () => cancelAnimationFrame(frame);
-  }, [activeLayout, measureLayouts, measures, playbackPosition, showLyrics]);
+  }, [activeLayout, measureLayouts, measures, playbackPosition, renderError, showLyrics]);
 
   useEffect(() => {
     const handleWindowScroll = () => disableFollowPlayback(false);
@@ -480,6 +505,10 @@ export const DrumSheet = forwardRef<DrumSheetHandle, Props>(function DrumSheet(
   }
 
   function handleBoardClick(pageIndex: number, event: React.MouseEvent<HTMLDivElement>) {
+    if (renderError) {
+      return;
+    }
+
     const board = boardRefs.current[pageIndex];
     if (!onSeek || !board) {
       return;
@@ -507,6 +536,7 @@ export const DrumSheet = forwardRef<DrumSheetHandle, Props>(function DrumSheet(
 
   return (
     <div className="score-wrap" aria-label="Drum sheet with synchronized playback">
+      {renderError ? <div className="error">Score rendering failed: {renderError}</div> : null}
       <div className="score-book-shell">
         <button
           aria-label="Previous page"
@@ -750,7 +780,9 @@ function makeVoiceNote(tick: DisplayTick, voice: VoiceNumber): StaveNote {
     stem_direction: voice === 1 ? 1 : -1,
   });
 
-  note.setFlagStyle({ fillStyle: "transparent", strokeStyle: "transparent" });
+  if (voice === 2) {
+    note.setFlagStyle({ fillStyle: "transparent", strokeStyle: "transparent" });
+  }
   keys.forEach((key, index) => {
     if (tick.events.some((event) => event.staff_key === key && event.notehead === "x")) {
       note.setKeyStyle(index, { fillStyle: "transparent", strokeStyle: "transparent" });
@@ -797,7 +829,8 @@ function drawCustomXNoteheads(
         return;
       }
 
-      drawXNotehead(context, note.getAbsoluteX(), y);
+      const xOffset = tickHasMixedHeadTypes(tick) ? -MIXED_HEAD_X_OFFSET_PX : 0;
+      drawXNotehead(context, note.getStemX() + xOffset, y);
     });
   });
 }
@@ -820,9 +853,37 @@ function drawXNotehead(
   context.restore();
 }
 
+function configureVoiceFlags(notes: StaveNote[], ticks: DisplayTick[], voice: VoiceNumber) {
+  if (voice === 2) {
+    notes.forEach((note) => note.setFlagStyle({ fillStyle: "transparent", strokeStyle: "transparent" }));
+    return;
+  }
+
+  const beamedNotes = new Set(
+    beamGroups(notes, ticks)
+      .filter((group) => group.layer === "DRUM" && shouldDrawBeam(group.ticks))
+      .flatMap((group) => group.notes),
+  );
+
+  notes.forEach((note, index) => {
+    const tick = ticks[index];
+    if (!tick || tick.hiddenRest || tick.duration === "q") {
+      note.setFlagStyle({ fillStyle: "transparent", strokeStyle: "transparent" });
+      return;
+    }
+
+    if (beamedNotes.has(note)) {
+      note.setFlagStyle({ fillStyle: "transparent", strokeStyle: "transparent" });
+      return;
+    }
+
+    note.setFlagStyle({ fillStyle: "#111317", strokeStyle: "#111317" });
+  });
+}
+
 function prepareStraightBeamStems(notes: StaveNote[], ticks: DisplayTick[], voice: VoiceNumber) {
-  for (const group of beatGroups(notes, ticks)) {
-    if (!shouldDrawBeam(group.ticks)) {
+  for (const group of beamGroups(notes, ticks)) {
+    if ((voice === 1 && group.layer !== "DRUM") || !shouldDrawBeam(group.ticks)) {
       continue;
     }
 
@@ -831,17 +892,14 @@ function prepareStraightBeamStems(notes: StaveNote[], ticks: DisplayTick[], voic
       continue;
     }
 
-    if (voice === 1) {
-      const beamY = Math.min(...visible.map(({ note }) => note.getStemExtents().baseY)) - 36;
-      for (const { note } of visible) {
+    const beamY = unifiedBeamY(visible, voice, group.layer);
+    for (const { note } of visible) {
+      if (voice === 1) {
         const baseY = note.getStemExtents().baseY;
-        note.setStemLength(Math.max(28, baseY - beamY));
-      }
-    } else {
-      const beamY = Math.max(...visible.map(({ note }) => note.getStemExtents().topY)) + 36;
-      for (const { note } of visible) {
+        note.setStemLength(Math.max(MIN_BEAMED_STEM_LENGTH_PX, baseY - beamY));
+      } else {
         const topY = note.getStemExtents().topY;
-        note.setStemLength(Math.max(28, beamY - topY));
+        note.setStemLength(Math.max(MIN_BEAMED_STEM_LENGTH_PX, beamY - topY));
       }
     }
   }
@@ -853,8 +911,8 @@ function drawStraightBeams(
   ticks: DisplayTick[],
   voice: VoiceNumber,
 ) {
-  for (const group of beatGroups(notes, ticks)) {
-    if (!shouldDrawBeam(group.ticks)) {
+  for (const group of beamGroups(notes, ticks)) {
+    if ((voice === 1 && group.layer !== "DRUM") || !shouldDrawBeam(group.ticks)) {
       continue;
     }
 
@@ -865,20 +923,34 @@ function drawStraightBeams(
 
     const first = visible[0].note;
     const last = visible[visible.length - 1].note;
-    const firstExtents = first.getStemExtents();
-    const lastExtents = last.getStemExtents();
     const x1 = first.getStemX();
     const x2 = last.getStemX();
-    const y1 = voice === 1 ? firstExtents.topY : firstExtents.baseY;
-    const y2 = voice === 1 ? lastExtents.topY : lastExtents.baseY;
-    const beamCount = group.ticks.some((tick) => tick.duration === "16") ? 2 : 1;
+    const beamY = unifiedBeamY(visible, voice, group.layer);
+    const beamCount = group.ticks.some((tick) => !tick.hiddenRest && tick.duration === "16") ? 2 : 1;
 
-    drawBeamBar(context, x1, y1, x2, y2);
+    drawBeamBar(context, x1, x2, beamY, voice);
     if (beamCount === 2) {
-      const offset = voice === 1 ? 8 : -8;
-      drawBeamBar(context, x1, y1 + offset, x2, y2 + offset);
+      const offset = voice === 1 ? BEAM_THICKNESS_PX + BEAM_SECONDARY_GAP_PX : -(BEAM_THICKNESS_PX + BEAM_SECONDARY_GAP_PX);
+      drawBeamBar(context, x1, x2, beamY + offset, voice);
     }
   }
+}
+
+function unifiedBeamY(
+  visible: Array<{
+    note: StaveNote;
+    tick: DisplayTick;
+  }>,
+  voice: VoiceNumber,
+  layer: InstrumentLayer,
+): number {
+  if (voice === 1) {
+    const highestHeadY = Math.min(...visible.flatMap(({ note }) => note.getYs()));
+    const clearance = layer === "CYMBAL" ? CYMBAL_BEAM_CLEARANCE_PX : DRUM_BEAM_CLEARANCE_PX;
+    return highestHeadY - clearance;
+  }
+
+  return Math.max(...visible.map(({ note }) => note.getStemExtents().baseY));
 }
 
 function beatGroups(notes: StaveNote[], ticks: DisplayTick[]): Array<{ notes: StaveNote[]; ticks: DisplayTick[] }> {
@@ -894,8 +966,65 @@ function beatGroups(notes: StaveNote[], ticks: DisplayTick[]): Array<{ notes: St
   return groups;
 }
 
+function beamGroups(
+  notes: StaveNote[],
+  ticks: DisplayTick[],
+): Array<{ layer: InstrumentLayer; notes: StaveNote[]; ticks: DisplayTick[] }> {
+  const groups: Array<{ layer: InstrumentLayer; notes: StaveNote[]; ticks: DisplayTick[] }> = [];
+
+  for (const beatGroup of beatGroups(notes, ticks)) {
+    let currentNotes: StaveNote[] = [];
+    let currentTicks: DisplayTick[] = [];
+    let currentLayer: InstrumentLayer | null = null;
+
+    beatGroup.ticks.forEach((tick, index) => {
+      const note = beatGroup.notes[index];
+      const layer = getInstrumentLayer(tick);
+      if (!note || !layer) {
+        if (currentNotes.length > 0) {
+          groups.push({ layer: currentLayer ?? "DRUM", notes: currentNotes, ticks: currentTicks });
+        }
+        currentNotes = [];
+        currentTicks = [];
+        currentLayer = null;
+        return;
+      }
+
+      if (currentLayer && layer !== currentLayer) {
+        groups.push({ layer: currentLayer, notes: currentNotes, ticks: currentTicks });
+        currentNotes = [];
+        currentTicks = [];
+      }
+
+      currentLayer = layer;
+      currentNotes.push(note);
+      currentTicks.push(tick);
+    });
+
+    if (currentNotes.length > 0) {
+      groups.push({ layer: currentLayer ?? "DRUM", notes: currentNotes, ticks: currentTicks });
+    }
+  }
+
+  return groups;
+}
+
 function visibleGroupItems(notes: StaveNote[], ticks: DisplayTick[]) {
   return notes.map((note, index) => ({ note, tick: ticks[index] })).filter((item) => !item.tick.hiddenRest);
+}
+
+function tickHasMixedHeadTypes(tick: DisplayTick): boolean {
+  const hasX = tick.events.some((event) => event.notehead === "x");
+  const hasRound = tick.events.some((event) => event.notehead === "normal");
+  return hasX && hasRound;
+}
+
+function getInstrumentLayer(tick: DisplayTick): InstrumentLayer | null {
+  if (tick.hiddenRest || tick.events.length === 0) {
+    return null;
+  }
+
+  return tick.events.some((event) => event.notehead === "x") ? "CYMBAL" : "DRUM";
 }
 
 function shouldDrawBeam(ticks: DisplayTick[]): boolean {
@@ -907,18 +1036,19 @@ function shouldDrawBeam(ticks: DisplayTick[]): boolean {
 function drawBeamBar(
   context: ReturnType<InstanceType<typeof Renderer>["getContext"]>,
   x1: number,
-  y1: number,
   x2: number,
-  y2: number,
+  beamY: number,
+  voice: VoiceNumber,
 ) {
-  const thickness = 5;
+  const topY = voice === 1 ? beamY : beamY - BEAM_THICKNESS_PX;
+  const bottomY = voice === 1 ? beamY + BEAM_THICKNESS_PX : beamY;
   context.save();
   context.setFillStyle("#111317");
   context.beginPath();
-  context.moveTo(x1, y1);
-  context.lineTo(x2, y2);
-  context.lineTo(x2, y2 + thickness);
-  context.lineTo(x1, y1 + thickness);
+  context.moveTo(x1, topY);
+  context.lineTo(x2, topY);
+  context.lineTo(x2, bottomY);
+  context.lineTo(x1, bottomY);
   context.closePath();
   context.fill();
   context.restore();
@@ -1313,10 +1443,11 @@ function addSlotLyric(slot: MeasureSlot, next: string | null | undefined, row: n
 }
 
 function addNotationEvent(slot: MeasureSlot, event: NotationEvent) {
-  if (event.voice === 1) {
-    slot.voice1 = dedupeNotationEvents([...slot.voice1, event]);
+  const normalizedEvent = normalizeNotationEvent(event);
+  if (normalizedEvent.voice === 1) {
+    slot.voice1 = dedupeNotationEvents([...slot.voice1, normalizedEvent]);
   } else {
-    slot.voice2 = dedupeNotationEvents([...slot.voice2, event]);
+    slot.voice2 = dedupeNotationEvents([...slot.voice2, normalizedEvent]);
   }
 }
 
@@ -1334,7 +1465,8 @@ function uniqueKeys(events: NotationEvent[]): string[] {
 
 function dedupeNotationEvents(events: NotationEvent[]): NotationEvent[] {
   const byNote = new Map<DrumNote, NotationEvent>();
-  for (const event of events) {
+  for (const rawEvent of events) {
+    const event = normalizeNotationEvent(rawEvent);
     const current = byNote.get(event.drum);
     if (!current || event.confidence > current.confidence) {
       byNote.set(event.drum, event);
@@ -1342,6 +1474,16 @@ function dedupeNotationEvents(events: NotationEvent[]): NotationEvent[] {
   }
 
   return Array.from(byNote.values()).sort((a, b) => NOTE_MAP[a.drum].order - NOTE_MAP[b.drum].order);
+}
+
+function normalizeNotationEvent(event: NotationEvent): NotationEvent {
+  const mapping = NOTE_MAP[event.drum];
+  return {
+    ...event,
+    staff_key: mapping.key,
+    voice: mapping.voice,
+    notehead: mapping.notehead,
+  };
 }
 
 function scoreEventToNotationEvent(event: ScoreEvent): NotationEvent {
