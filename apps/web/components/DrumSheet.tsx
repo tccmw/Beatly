@@ -95,7 +95,14 @@ const BEAM_SECONDARY_GAP_PX = 6;
 const MIN_BEAMED_STEM_LENGTH_PX = 28;
 const CYMBAL_BEAM_CLEARANCE_PX = 34;
 const DRUM_BEAM_CLEARANCE_PX = 26;
-const MIXED_HEAD_X_OFFSET_PX = 10;
+const UPPER_STEM_LENGTH_PX = 30;
+const LOWER_STEM_LENGTH_PX = 26;
+const X_NOTEHEAD_SIZE_PX = 5.5;
+const ROUND_NOTEHEAD_RADIUS_X_PX = 6.5;
+const ROUND_NOTEHEAD_RADIUS_Y_PX = 4.8;
+const CYMBAL_LAYER_OFFSET_PX = 15;
+const STAFF_CENTER_LINE = 2;
+const KICK_DISPLAY_LINE = 3.5;
 
 export const DrumSheet = forwardRef<DrumSheetHandle, Props>(function DrumSheet(
   { audioCurrentTime = 0, followPlayback = true, isPlaying = false, onFollowPlaybackChange, onSeek, score, showLyrics = true }: Props,
@@ -215,15 +222,16 @@ export const DrumSheet = forwardRef<DrumSheetHandle, Props>(function DrumSheet(
           const formatterWidth = staveWidth - (localIndex === 0 ? FIRST_MEASURE_RESERVE_PX : REGULAR_MEASURE_RESERVE_PX);
           new Formatter().joinVoices([upperVoice, lowerVoice]).format([upperVoice, lowerVoice], formatterWidth);
 
-          configureVoiceFlags(upperNotes, upperTicks, 1);
-          configureVoiceFlags(lowerNotes, lowerTicks, 2);
+          configureVoiceFlags(upperNotes);
+          configureVoiceFlags(lowerNotes);
           prepareStraightBeamStems(upperNotes, upperTicks, 1);
 
           upperVoice.draw(context, stave);
           lowerVoice.draw(context, stave);
 
+          drawCustomUpperVoiceGeometry(context, upperNotes, upperTicks);
+          drawCustomLowerVoiceGeometry(context, lowerNotes, lowerTicks);
           drawStraightBeams(context, upperNotes, upperTicks, 1);
-          drawCustomXNoteheads(context, upperNotes, upperTicks);
 
           upperTicks.forEach((tick, tickIndex) => {
             drawHiHatStateMarks(context, upperNotes[tickIndex], tick);
@@ -780,13 +788,10 @@ function makeVoiceNote(tick: DisplayTick, voice: VoiceNumber): StaveNote {
     stem_direction: voice === 1 ? 1 : -1,
   });
 
-  if (voice === 2) {
-    note.setFlagStyle({ fillStyle: "transparent", strokeStyle: "transparent" });
-  }
-  keys.forEach((key, index) => {
-    if (tick.events.some((event) => event.staff_key === key && event.notehead === "x")) {
-      note.setKeyStyle(index, { fillStyle: "transparent", strokeStyle: "transparent" });
-    }
+  note.setFlagStyle({ fillStyle: "transparent", strokeStyle: "transparent" });
+  note.setStemStyle({ fillStyle: "transparent", strokeStyle: "transparent" });
+  keys.forEach((_, index) => {
+    note.setKeyStyle(index, { fillStyle: "transparent", strokeStyle: "transparent" });
   });
 
   if (tick.events.some((event) => event.articulation === "accent")) {
@@ -805,7 +810,60 @@ function renderableEvents(events: NotationEvent[]): NotationEvent[] {
   return events.filter((event) => event.notehead === "normal");
 }
 
-function drawCustomXNoteheads(
+function drawCustomUpperVoiceGeometry(
+  context: ReturnType<InstanceType<typeof Renderer>["getContext"]>,
+  notes: StaveNote[],
+  ticks: DisplayTick[],
+) {
+  const beamedStemTargets = new Map<StaveNote, number>();
+  for (const group of beamGroups(notes, ticks)) {
+    if (group.layer !== "DRUM" || !shouldDrawBeam(group.ticks)) {
+      continue;
+    }
+
+    const visible = visibleGroupItems(group.notes, group.ticks);
+    if (visible.length < 2) {
+      continue;
+    }
+
+    const beamY = unifiedBeamY(visible, 1, group.layer);
+    visible.forEach(({ note }) => beamedStemTargets.set(note, beamY));
+  }
+
+  notes.forEach((note, noteIndex) => {
+    const tick = ticks[noteIndex];
+    if (!tick || tick.hiddenRest) {
+      return;
+    }
+
+    const drumEvent = tick.events.find((event) => event.notehead === "normal");
+    const cymbalEvent = tick.events.find((event) => event.notehead === "x");
+    const roundY = drumEvent ? resolveNoteY(note, drumEvent.staff_key) : null;
+    const cymbalY = cymbalEvent ? resolveNoteY(note, cymbalEvent.staff_key) : null;
+    const visibleHeadYs = [roundY, cymbalY].filter((value): value is number => value !== null);
+    if (visibleHeadYs.length > 0) {
+      const stemX = note.getStemX();
+      const topHeadY = Math.min(...visibleHeadYs);
+      const bottomHeadY = Math.max(...visibleHeadYs);
+      const stemEndY = beamedStemTargets.get(note) ?? topHeadY - UPPER_STEM_LENGTH_PX;
+      drawVerticalStem(context, stemX, bottomHeadY, stemEndY);
+    }
+
+    if (drumEvent) {
+      if (roundY !== null) {
+        drawRoundNotehead(context, note.getStemX() - ROUND_NOTEHEAD_RADIUS_X_PX, roundY);
+      }
+    }
+
+    if (cymbalEvent) {
+      if (cymbalY !== null) {
+        drawXNotehead(context, note.getStemX() - X_NOTEHEAD_SIZE_PX, cymbalY);
+      }
+    }
+  });
+}
+
+function drawCustomLowerVoiceGeometry(
   context: ReturnType<InstanceType<typeof Renderer>["getContext"]>,
   notes: StaveNote[],
   ticks: DisplayTick[],
@@ -816,23 +874,67 @@ function drawCustomXNoteheads(
       return;
     }
 
-    const keys = uniqueKeys(tick.events);
-    const ys = note.getYs();
-    tick.events.forEach((event) => {
-      if (event.notehead !== "x") {
-        return;
-      }
+    const kickEvent = tick.events.find((event) => event.notehead === "normal");
+    if (!kickEvent) {
+      return;
+    }
 
-      const keyIndex = keys.indexOf(event.staff_key);
-      const y = ys[keyIndex] ?? ys[0];
-      if (!Number.isFinite(y)) {
-        return;
-      }
+    const headY = resolveNoteY(note, kickEvent.staff_key);
+    if (headY === null) {
+      return;
+    }
 
-      const xOffset = tickHasMixedHeadTypes(tick) ? -MIXED_HEAD_X_OFFSET_PX : 0;
-      drawXNotehead(context, note.getStemX() + xOffset, y);
-    });
+    const stemX = note.getStemX();
+    drawVerticalStem(context, stemX, headY, headY + LOWER_STEM_LENGTH_PX);
+    drawRoundNotehead(context, stemX + ROUND_NOTEHEAD_RADIUS_X_PX, headY);
   });
+}
+
+function drawRoundNotehead(
+  context: ReturnType<InstanceType<typeof Renderer>["getContext"]>,
+  centerX: number,
+  centerY: number,
+) {
+  const handle = 0.5522847498;
+  context.save();
+  context.setFillStyle("#111317");
+  context.beginPath();
+  context.moveTo(centerX, centerY - ROUND_NOTEHEAD_RADIUS_Y_PX);
+  context.bezierCurveTo(
+    centerX + ROUND_NOTEHEAD_RADIUS_X_PX * handle,
+    centerY - ROUND_NOTEHEAD_RADIUS_Y_PX,
+    centerX + ROUND_NOTEHEAD_RADIUS_X_PX,
+    centerY - ROUND_NOTEHEAD_RADIUS_Y_PX * handle,
+    centerX + ROUND_NOTEHEAD_RADIUS_X_PX,
+    centerY,
+  );
+  context.bezierCurveTo(
+    centerX + ROUND_NOTEHEAD_RADIUS_X_PX,
+    centerY + ROUND_NOTEHEAD_RADIUS_Y_PX * handle,
+    centerX + ROUND_NOTEHEAD_RADIUS_X_PX * handle,
+    centerY + ROUND_NOTEHEAD_RADIUS_Y_PX,
+    centerX,
+    centerY + ROUND_NOTEHEAD_RADIUS_Y_PX,
+  );
+  context.bezierCurveTo(
+    centerX - ROUND_NOTEHEAD_RADIUS_X_PX * handle,
+    centerY + ROUND_NOTEHEAD_RADIUS_Y_PX,
+    centerX - ROUND_NOTEHEAD_RADIUS_X_PX,
+    centerY + ROUND_NOTEHEAD_RADIUS_Y_PX * handle,
+    centerX - ROUND_NOTEHEAD_RADIUS_X_PX,
+    centerY,
+  );
+  context.bezierCurveTo(
+    centerX - ROUND_NOTEHEAD_RADIUS_X_PX,
+    centerY - ROUND_NOTEHEAD_RADIUS_Y_PX * handle,
+    centerX - ROUND_NOTEHEAD_RADIUS_X_PX * handle,
+    centerY - ROUND_NOTEHEAD_RADIUS_Y_PX,
+    centerX,
+    centerY - ROUND_NOTEHEAD_RADIUS_Y_PX,
+  );
+  context.closePath();
+  context.fill();
+  context.restore();
 }
 
 function drawXNotehead(
@@ -840,45 +942,36 @@ function drawXNotehead(
   centerX: number,
   centerY: number,
 ) {
-  const size = 5.5;
   context.save();
   context.setStrokeStyle("#111317");
   context.setLineWidth(1.6);
   context.beginPath();
-  context.moveTo(centerX - size, centerY - size);
-  context.lineTo(centerX + size, centerY + size);
-  context.moveTo(centerX + size, centerY - size);
-  context.lineTo(centerX - size, centerY + size);
+  context.moveTo(centerX - X_NOTEHEAD_SIZE_PX, centerY - X_NOTEHEAD_SIZE_PX);
+  context.lineTo(centerX + X_NOTEHEAD_SIZE_PX, centerY + X_NOTEHEAD_SIZE_PX);
+  context.moveTo(centerX + X_NOTEHEAD_SIZE_PX, centerY - X_NOTEHEAD_SIZE_PX);
+  context.lineTo(centerX - X_NOTEHEAD_SIZE_PX, centerY + X_NOTEHEAD_SIZE_PX);
   context.stroke();
   context.restore();
 }
 
-function configureVoiceFlags(notes: StaveNote[], ticks: DisplayTick[], voice: VoiceNumber) {
-  if (voice === 2) {
-    notes.forEach((note) => note.setFlagStyle({ fillStyle: "transparent", strokeStyle: "transparent" }));
-    return;
-  }
+function drawVerticalStem(
+  context: ReturnType<InstanceType<typeof Renderer>["getContext"]>,
+  x: number,
+  y1: number,
+  y2: number,
+) {
+  context.save();
+  context.setStrokeStyle("#111317");
+  context.setLineWidth(1.6);
+  context.beginPath();
+  context.moveTo(x, y1);
+  context.lineTo(x, y2);
+  context.stroke();
+  context.restore();
+}
 
-  const beamedNotes = new Set(
-    beamGroups(notes, ticks)
-      .filter((group) => group.layer === "DRUM" && shouldDrawBeam(group.ticks))
-      .flatMap((group) => group.notes),
-  );
-
-  notes.forEach((note, index) => {
-    const tick = ticks[index];
-    if (!tick || tick.hiddenRest || tick.duration === "q") {
-      note.setFlagStyle({ fillStyle: "transparent", strokeStyle: "transparent" });
-      return;
-    }
-
-    if (beamedNotes.has(note)) {
-      note.setFlagStyle({ fillStyle: "transparent", strokeStyle: "transparent" });
-      return;
-    }
-
-    note.setFlagStyle({ fillStyle: "#111317", strokeStyle: "#111317" });
-  });
+function configureVoiceFlags(notes: StaveNote[]) {
+  notes.forEach((note) => note.setFlagStyle({ fillStyle: "transparent", strokeStyle: "transparent" }));
 }
 
 function prepareStraightBeamStems(notes: StaveNote[], ticks: DisplayTick[], voice: VoiceNumber) {
@@ -945,7 +1038,10 @@ function unifiedBeamY(
   layer: InstrumentLayer,
 ): number {
   if (voice === 1) {
-    const highestHeadY = Math.min(...visible.flatMap(({ note }) => note.getYs()));
+    const highestHeadY =
+      layer === "CYMBAL"
+        ? (visible[0]?.note.getStave()?.getYForLine(0) ?? 0) - CYMBAL_LAYER_OFFSET_PX
+        : visible[0]?.note.getStave()?.getYForLine(STAFF_CENTER_LINE) ?? Math.min(...visible.flatMap(({ note }) => note.getYs()));
     const clearance = layer === "CYMBAL" ? CYMBAL_BEAM_CLEARANCE_PX : DRUM_BEAM_CLEARANCE_PX;
     return highestHeadY - clearance;
   }
@@ -1013,12 +1109,6 @@ function visibleGroupItems(notes: StaveNote[], ticks: DisplayTick[]) {
   return notes.map((note, index) => ({ note, tick: ticks[index] })).filter((item) => !item.tick.hiddenRest);
 }
 
-function tickHasMixedHeadTypes(tick: DisplayTick): boolean {
-  const hasX = tick.events.some((event) => event.notehead === "x");
-  const hasRound = tick.events.some((event) => event.notehead === "normal");
-  return hasX && hasRound;
-}
-
 function getInstrumentLayer(tick: DisplayTick): InstrumentLayer | null {
   if (tick.hiddenRest || tick.events.length === 0) {
     return null;
@@ -1065,20 +1155,18 @@ function drawHiHatStateMarks(
     return;
   }
 
-  const keys = uniqueKeys(tick.events);
-  const ys = note.getYs();
   const drawn = new Set<string>();
   for (const event of hatEvents) {
     if (drawn.has(event.staff_key)) {
       continue;
     }
 
-    const keyIndex = Math.max(0, keys.indexOf(event.staff_key));
-    const y = ys[keyIndex] ?? ys[0] ?? 0;
+    const y = resolveNoteY(note, event.staff_key) ?? note.getYs()[0] ?? 0;
+    const x = note.getStemX() - X_NOTEHEAD_SIZE_PX;
     const mark = event.articulation === "open" ? "o" : "+";
     context.save();
     context.setFont("Arial", 11);
-    context.fillText(mark, note.getAbsoluteX() - 4, y - 10);
+    context.fillText(mark, x - 4, y - 10);
     context.restore();
     drawn.add(event.staff_key);
   }
@@ -1095,10 +1183,8 @@ function drawGhostSnareMarks(
     return;
   }
 
-  const keys = uniqueKeys(renderEvents);
-  const keyIndex = Math.max(0, keys.indexOf(ghostSnare.staff_key));
-  const y = note.getYs()[keyIndex] ?? note.getYs()[0] ?? 0;
-  const x = note.getAbsoluteX();
+  const y = resolveNoteY(note, ghostSnare.staff_key) ?? note.getYs()[0] ?? 0;
+  const x = note.getStemX() - ROUND_NOTEHEAD_RADIUS_X_PX;
   context.save();
   context.setFont("Arial, Malgun Gothic, sans-serif", 13);
   context.fillText("(", x - 12, y + 4);
@@ -1147,6 +1233,43 @@ function lyricVisualWidth(text: string): number {
     }
     return width + 7;
   }, 0);
+}
+
+function resolveNoteY(note: StaveNote, staffKey: string): number | null {
+  const mappedY = resolveMappedStaffKeyY(note, staffKey);
+  if (mappedY !== null) {
+    return mappedY;
+  }
+
+  const keyProps = note.getKeyProps();
+  const ys = note.getYs();
+  const keyIndex = keyProps.findIndex((props) => props.key === staffKey);
+  if (keyIndex < 0) {
+    return ys[0] ?? null;
+  }
+
+  return ys[keyIndex] ?? ys[0] ?? null;
+}
+
+function resolveMappedStaffKeyY(note: StaveNote, staffKey: string): number | null {
+  const stave = note.getStave();
+  if (!stave) {
+    return null;
+  }
+
+  if (staffKey === "a/5" || staffKey === "g/5" || staffKey === "f/5") {
+    return stave.getYForLine(0) - CYMBAL_LAYER_OFFSET_PX;
+  }
+
+  if (staffKey === "c/5" || staffKey === "e/5") {
+    return stave.getYForLine(STAFF_CENTER_LINE);
+  }
+
+  if (staffKey === "f/4") {
+    return stave.getYForLine(KICK_DISPLAY_LINE);
+  }
+
+  return null;
 }
 
 function isHangulSyllable(char: string): boolean {

@@ -17,9 +17,16 @@
 - 베이스 드럼: 1번 칸, `f/4`, Voice 2, 아래 기둥.
 - 스네어: 3번 칸, `c/5`, Voice 1, 위 기둥.
 - 하이햇: 5번 선, `g/5`, `x` notehead, Voice 1, 위 기둥.
+- 크래시: `a/5`, `x` notehead, Voice 1, 위 기둥.
+- 라이드: `f/5`, `x` notehead, Voice 1, 위 기둥.
+- 탐: `e/5`, normal notehead, Voice 1, 위 기둥.
 - 손 성부와 발 성부를 분리한다.
 - 손: Voice 1, stem up.
 - 발: Voice 2, stem down.
+- 프론트엔드 렌더에서는 손 성부 cymbal(`x`)을 항상 staff top 기준 위쪽 고정 lane에 둔다.
+- 프론트엔드 렌더에서는 손 성부 drum(normal)을 항상 staff center 고정 lane에 둔다.
+- 같은 슬롯에 cymbal과 drum이 함께 있어도 같은 Y 좌표에 놓이면 안 된다.
+- 같은 슬롯의 손 성부 혼합 타격은 같은 stem 축을 공유할 수 있지만, cymbal과 drum notehead는 서로 다른 고정 Y layer에 남아야 한다.
 - 발 성부에는 긴 연결 보를 만들지 않는다.
 - 모든 리듬은 최소 16분 음표 슬롯으로 퀀타이즈한다.
 - 32분/64분 음표는 생성하지 않는다.
@@ -55,6 +62,9 @@
 - Voice 2는 16분 연속 보를 만들 수 있는 출력으로 남기지 않는다.
 - `words`에 존재하는 가사는 `engraved_measures[*].lyric_slots` 또는 `slots`에 남아 있어야 한다.
 - 하이햇은 `g/5` + `x`, 스네어는 `c/5` + normal, 킥은 `f/4` + normal로 렌더링되어야 한다.
+- 손 성부의 `x` notehead는 항상 staff 위쪽 고정 lane에 렌더링되어야 한다.
+- 손 성부의 normal notehead는 항상 staff center 고정 lane에 렌더링되어야 한다.
+- 같은 슬롯의 손 성부에서 `x`와 normal이 함께 존재할 때, 두 notehead는 서로 다른 Y 좌표로 렌더링되어야 한다.
 
 ## Executable Harness
 
