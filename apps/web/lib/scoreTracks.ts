@@ -95,6 +95,10 @@ export type BassRenderNote = {
   lyric?: string | null;
   measure: number;
   slot: number;
+  slideDirection: "up" | "down" | null;
+  slideOutDirection: "up" | "down" | null;
+  slurFromPrevious: boolean;
+  slurToNext: boolean;
   string: 1 | 2 | 3 | 4;
   techniques: BassTechnique[];
   tieFromPrevious: boolean;
@@ -631,6 +635,8 @@ function bassSpecNoteToRenderNote(note: BassSpecNote, measure: number, slot: num
   const isDead = position.fret === "X" || techniques.includes("DEAD") || Boolean(note.is_dead);
   const stringMidi = BASS_STRING_OPEN_MIDI[position.string];
   const fallbackMidi = actualMidi ?? stringMidi;
+  const slideDirection = resolveBassSlideDirection(note);
+  const slideOutDirection = resolveBassSlideOutDirection(note);
 
   return {
     actualMidi: fallbackMidi,
@@ -646,6 +652,10 @@ function bassSpecNoteToRenderNote(note: BassSpecNote, measure: number, slot: num
     lyric: note.lyric ?? null,
     measure,
     slot,
+    slideDirection,
+    slideOutDirection,
+    slurFromPrevious: Boolean(note.slur_from_previous),
+    slurToNext: Boolean(note.slur_to_next),
     string: position.string,
     techniques,
     tieFromPrevious: Boolean(note.tie_from_previous),
@@ -671,6 +681,8 @@ function sourceEventToBassRenderNote(
   const fallbackMidi = actualMidi ?? BASS_STRING_OPEN_MIDI[position.string];
   const chord = readString(source.chord) ?? readString(source.harmony) ?? null;
   const lyric = readString(source.lyric);
+  const slideDirection = resolveBassSlideDirection(source);
+  const slideOutDirection = resolveBassSlideOutDirection(source);
 
   return {
     actualMidi: fallbackMidi,
@@ -686,6 +698,10 @@ function sourceEventToBassRenderNote(
     lyric,
     measure,
     slot,
+    slideDirection,
+    slideOutDirection,
+    slurFromPrevious: readBoolean(source.slur_from_previous),
+    slurToNext: readBoolean(source.slur_to_next),
     string: position.string,
     techniques,
     tieFromPrevious: readBoolean(source.tie_from_previous),
@@ -865,6 +881,9 @@ function normalizeBassTechnique(value: unknown): BassTechnique | null {
   }
 
   const normalized = value.trim().toUpperCase().replace(/[\s-]+/g, "_");
+  if (normalized === "/" || normalized === "\\") {
+    return "SLIDE";
+  }
   if (normalized === "H" || normalized === "HAMMER" || normalized === "HAMMER_ON" || normalized === "HAMMERON") {
     return "HAMMER_ON";
   }
@@ -883,6 +902,73 @@ function normalizeBassTechnique(value: unknown): BassTechnique | null {
   if (normalized === "POP") {
     return "POP";
   }
+  return null;
+}
+
+function resolveBassSlideDirection(source: BassSourceLike): "up" | "down" | null {
+  const explicitDirection = readBassSlideDirection(source.slide_direction);
+  if (explicitDirection) {
+    return explicitDirection;
+  }
+
+  const rawValues = [source.technique, ...(Array.isArray(source.techniques) ? source.techniques : [])];
+  for (const value of rawValues) {
+    if (typeof value !== "string") {
+      continue;
+    }
+
+    const normalized = value.trim().toUpperCase().replace(/[\s-]+/g, "_");
+    if (normalized === "/") {
+      return "up";
+    }
+    if (normalized === "\\") {
+      return "down";
+    }
+    if (!normalized.includes("SLIDE")) {
+      continue;
+    }
+    if (normalized.includes("DOWN") || normalized.includes("DESC")) {
+      return "down";
+    }
+    if (normalized.includes("UP") || normalized.includes("ASC") || normalized === "/") {
+      return "up";
+    }
+    if (normalized === "\\") {
+      return "down";
+    }
+  }
+
+  return null;
+}
+
+function resolveBassSlideOutDirection(source: BassSourceLike): "up" | "down" | null {
+  const explicitDirection = readBassSlideDirection(source.slide_out_direction);
+  if (explicitDirection) {
+    return explicitDirection;
+  }
+
+  const rawValues = [source.technique, ...(Array.isArray(source.techniques) ? source.techniques : [])];
+  for (const value of rawValues) {
+    if (typeof value !== "string") {
+      continue;
+    }
+
+    const normalized = value.trim().toUpperCase().replace(/[\s-]+/g, "_");
+    if (!normalized.includes("OUT")) {
+      continue;
+    }
+    if (normalized.includes("DOWN") || normalized.includes("DESC") || normalized === "\\") {
+      return "down";
+    }
+    if (normalized.includes("UP") || normalized.includes("ASC") || normalized === "/") {
+      return "up";
+    }
+  }
+
+  if (readBoolean(source.slide_out_to_nowhere)) {
+    return resolveBassSlideDirection(source) ?? "up";
+  }
+
   return null;
 }
 
@@ -936,12 +1022,12 @@ function bassDurationFromSlots(durationSlots: number): BassDuration {
 }
 
 function resolveBassDisplayStaffKey(staffKey: string | null, actualMidi: number): string {
-  const normalized = normalizeStaffKey(staffKey);
-  if (normalized) {
-    return normalized;
+  const transposedStaffKey = transposeStaffKeyOctaves(staffKey, 1, true);
+  if (transposedStaffKey) {
+    return transposedStaffKey;
   }
 
-  return staffKeyFromMidi(actualMidi + 12) ?? "e/3";
+  return staffKeyFromMidi(actualMidi + 12, true) ?? "e/3";
 }
 
 function slashChordBassMidi(chord: string | null, anchorMidi: number | null): number | null {
@@ -1349,6 +1435,24 @@ function readBassString(value: unknown): 1 | 2 | 3 | 4 | null {
   return null;
 }
 
+function readBassSlideDirection(value: unknown): "up" | "down" | null {
+  if (value === "up" || value === "down") {
+    return value;
+  }
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "up" || normalized === "/") {
+    return "up";
+  }
+  if (normalized === "down" || normalized === "\\") {
+    return "down";
+  }
+  return null;
+}
+
 function normalizeBassFret(value: unknown): number | "X" | null {
   if (value === "X" || value === "x") {
     return "X";
@@ -1410,14 +1514,25 @@ function normalizeStaffKey(value: string | null): string | null {
   return /^[a-g][#b]?\/-?\d+$/.test(normalized) ? normalized : null;
 }
 
-function staffKeyFromMidi(midi: number | null): string | null {
+function transposeStaffKeyOctaves(staffKey: string | null, octaves: number, preferFlats = false): string | null {
+  const midi = midiFromStaffKey(staffKey);
+  if (midi === null) {
+    return null;
+  }
+
+  return staffKeyFromMidi(midi + octaves * 12, preferFlats);
+}
+
+function staffKeyFromMidi(midi: number | null, preferFlats = false): string | null {
   if (midi === null || !Number.isFinite(midi)) {
     return null;
   }
 
-  const noteNames = ["c", "c#", "d", "d#", "e", "f", "f#", "g", "g#", "a", "a#", "b"] as const;
+  const sharpNames = ["c", "c#", "d", "d#", "e", "f", "f#", "g", "g#", "a", "a#", "b"] as const;
+  const flatNames = ["c", "db", "d", "eb", "e", "f", "gb", "g", "ab", "a", "bb", "b"] as const;
   const pitchClass = ((Math.round(midi) % 12) + 12) % 12;
   const octave = Math.floor(Math.round(midi) / 12) - 1;
+  const noteNames = preferFlats ? flatNames : sharpNames;
   return `${noteNames[pitchClass]}/${octave}`;
 }
 

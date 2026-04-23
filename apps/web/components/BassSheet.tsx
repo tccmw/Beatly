@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  Annotation,
   Articulation,
   Beam,
   Curve,
@@ -62,6 +61,7 @@ type RenderedBassNote = {
   centerX: number;
   note: BassRenderNote;
   standardNote: StaveNote | null;
+  systemKey: string;
   tabStave: TabStave;
 };
 
@@ -70,7 +70,7 @@ const PAGE_PADDING_X = 24;
 const PAGE_PADDING_Y = 34;
 const PAGE_WIDTH_PX = 794;
 const SLOTS_PER_MEASURE = 16;
-const MIN_SLOT_WIDTH_PX = 40;
+const MEASURES_PER_LINE = 4;
 const FIRST_MEASURE_RESERVE_PX = 76;
 const REGULAR_MEASURE_RESERVE_PX = 24;
 const LYRIC_FONT_SIZE = 12;
@@ -177,10 +177,14 @@ export const BassSheet = forwardRef<DrumSheetHandle, Props>(function BassSheet(
 
         page.measures.forEach((measure, localIndex) => {
           const globalIndex = page.measureStart - 1 + localIndex;
-          const x = PAGE_PADDING_X;
-          const y = PAGE_PADDING_Y + localIndex * lineHeight;
+          const measureInLine = localIndex % MEASURES_PER_LINE;
+          const lineIndex = Math.floor(localIndex / MEASURES_PER_LINE);
+          const x = PAGE_PADDING_X + measureInLine * measureWidth;
+          const y = PAGE_PADDING_Y + lineIndex * lineHeight;
           const staveWidth = measureWidth;
           const displayTicks = buildBassDisplayTicks(measure);
+          const isLineStart = measureInLine === 0;
+          const systemKey = `${pageIndex}:${lineIndex}`;
 
           drawMeasureNumber(context, globalIndex + 1, x, y);
 
@@ -188,14 +192,14 @@ export const BassSheet = forwardRef<DrumSheetHandle, Props>(function BassSheet(
           const tabStave = new TabStave(x, y + TAB_GAP_PX, staveWidth, { num_lines: 4, spacing_between_lines_px: 15 });
 
           if (track.mode !== "tab") {
-            if (localIndex === 0) {
+            if (isLineStart) {
               standardStave.addClef("bass").addTimeSignature("4/4");
             }
             standardStave.setContext(context).draw();
           }
 
           if (track.mode !== "standard") {
-            if (localIndex === 0) {
+            if (isLineStart) {
               tabStave.addClef("tab").addTimeSignature("4/4");
             }
             tabStave.setContext(context).draw();
@@ -210,13 +214,13 @@ export const BassSheet = forwardRef<DrumSheetHandle, Props>(function BassSheet(
             const voice = new Voice({ num_beats: 4, beat_value: 4 }).setStrict(true);
             voice.addTickables(notes);
 
-            const formatterWidth = staveWidth - (localIndex === 0 ? FIRST_MEASURE_RESERVE_PX : REGULAR_MEASURE_RESERVE_PX);
+            const formatterWidth = staveWidth - (isLineStart ? FIRST_MEASURE_RESERVE_PX : REGULAR_MEASURE_RESERVE_PX);
             new Formatter().joinVoices([voice]).format([voice], formatterWidth);
             voice.draw(context, standardStave);
             Beam.generateBeams(notes).forEach((beam) => beam.setContext(context).draw());
 
             drawTabNumbers(context, displayTicks, notes, tabStave, track.mode);
-            renderedNotes.push(...collectRenderedNotes(displayTicks, notes, tabStave));
+            renderedNotes.push(...collectRenderedNotes(displayTicks, notes, tabStave, systemKey));
 
             if (showLyrics) {
               drawLyricLane(context, lyricsHostStave(track.mode, standardStave, tabStave), measure);
@@ -227,7 +231,7 @@ export const BassSheet = forwardRef<DrumSheetHandle, Props>(function BassSheet(
           }
 
           drawTabNumbers(context, displayTicks, [], tabStave, track.mode);
-          renderedNotes.push(...collectRenderedNotes(displayTicks, [], tabStave));
+          renderedNotes.push(...collectRenderedNotes(displayTicks, [], tabStave, systemKey));
           if (showLyrics) {
             drawLyricLane(context, tabStave, measure);
           }
@@ -686,13 +690,11 @@ function paginateMeasures(
   measures: BassMeasure[],
   lineHeight: number,
 ): { measureWidth: number; measuresPerPage: number; pages: PageDescriptor[] } {
-  const measuresPerLine = 1;
   const innerHeight = PAGE_HEIGHT_PX - PAGE_PADDING_Y * 2;
   const linesPerPage = Math.max(1, Math.floor(innerHeight / lineHeight));
-  const measuresPerPage = Math.max(1, measuresPerLine * linesPerPage);
-  const minimumMeasureWidth = SLOTS_PER_MEASURE * MIN_SLOT_WIDTH_PX + REGULAR_MEASURE_RESERVE_PX;
+  const measuresPerPage = Math.max(1, MEASURES_PER_LINE * linesPerPage);
   const innerWidth = PAGE_WIDTH_PX - PAGE_PADDING_X * 2;
-  const measureWidth = Math.max(minimumMeasureWidth, innerWidth / measuresPerLine);
+  const measureWidth = innerWidth / MEASURES_PER_LINE;
   const pages: PageDescriptor[] = [];
 
   for (let startIndex = 0; startIndex < measures.length; startIndex += measuresPerPage) {
@@ -730,7 +732,7 @@ function buildBassDisplayTicks(measure: BassMeasure): BassDisplayTick[] {
         measure.notes.find((entry) => entry.slot > slot)?.slot ?? SLOTS_PER_MEASURE;
       const durationSlots = Math.max(1, Math.min(note.durationSlots, nextNoteSlot - slot, SLOTS_PER_MEASURE - slot));
       ticks.push({
-        duration: note.duration,
+        duration: durationFromSlots(durationSlots),
         durationSlots,
         note,
         slot,
@@ -818,19 +820,6 @@ function makeBassStandardNote(tick: BassDisplayTick): StaveNote {
       0,
     );
   }
-
-  if (tick.note.techniques.includes("HAMMER_ON")) {
-    note.addModifier(
-      new Annotation("H").setJustification("center").setVerticalJustification("top").setFont("Arial", 12, "bold"),
-      0,
-    );
-  } else if (tick.note.techniques.includes("PULL_OFF")) {
-    note.addModifier(
-      new Annotation("P").setJustification("center").setVerticalJustification("top").setFont("Arial", 12, "bold"),
-      0,
-    );
-  }
-
   return note;
 }
 
@@ -884,6 +873,7 @@ function collectRenderedNotes(
   ticks: BassDisplayTick[],
   standardNotes: StaveNote[],
   tabStave: TabStave,
+  systemKey: string,
 ): RenderedBassNote[] {
   return ticks.flatMap((tick, index) => {
     if (!tick.note) {
@@ -896,6 +886,7 @@ function collectRenderedNotes(
         centerX: standardNote ? noteCenterX(standardNote) : slotToX(tabStave, tick.slot),
         note: tick.note,
         standardNote,
+        systemKey,
         tabStave,
       },
     ];
@@ -908,53 +899,92 @@ function drawTechniqueConnections(
 ) {
   for (let index = 0; index < renderedNotes.length; index += 1) {
     const current = renderedNotes[index];
-    const next = renderedNotes[index + 1];
-    if (!current || !next) {
+    const next = renderedNotes[index + 1] ?? null;
+    if (!current) {
       continue;
     }
+    const connectableNext = next && canConnectRenderedNotes(current, next) ? next : null;
 
-    if (current.note.tieToNext) {
-      if (current.standardNote && next.standardNote) {
-        new StaveTie({
-          first_indices: [0],
-          first_note: current.standardNote,
-          last_indices: [0],
-          last_note: next.standardNote,
-        })
-          .setContext(context)
-          .draw();
-      } else {
-        drawTabArc(context, current, next);
-      }
+    if (current.note.tieToNext && connectableNext) {
+      drawTieConnection(context, current, connectableNext);
     }
 
-    if (current.note.techniques.includes("HAMMER_ON") || current.note.techniques.includes("PULL_OFF")) {
-      if (current.standardNote && next.standardNote) {
-        new Curve(current.standardNote, next.standardNote, {
-          cps: [
-            { x: 0, y: 8 },
-            { x: 0, y: 8 },
-          ],
-          position: "nearHead",
-          position_end: "nearHead",
-          y_shift: 6,
-        })
-          .setContext(context)
-          .draw();
-      } else {
-        drawTabArc(
-          context,
-          current,
-          next,
-          current.note.techniques.includes("HAMMER_ON") ? "H" : "P",
-        );
-      }
+    if ((current.note.techniques.includes("HAMMER_ON") || current.note.techniques.includes("PULL_OFF")) && connectableNext) {
+      drawSlurConnection(context, current, connectableNext, current.note.techniques.includes("HAMMER_ON") ? "H" : "P");
+    } else if (current.note.slurToNext && connectableNext) {
+      drawSlurConnection(context, current, connectableNext);
     }
 
     if (current.note.techniques.includes("SLIDE")) {
-      drawSlideLine(context, current, next);
+      if (connectableNext) {
+        drawSlideLine(context, current, connectableNext);
+      } else {
+        drawSlideOutTail(context, current, current.note.slideOutDirection ?? resolveRenderedSlideDirection(current.note));
+      }
     }
   }
+}
+
+function canConnectRenderedNotes(current: RenderedBassNote, next: RenderedBassNote): boolean {
+  if (current.systemKey !== next.systemKey) {
+    return false;
+  }
+
+  return next.note.measure === current.note.measure || next.note.measure === current.note.measure + 1;
+}
+
+function drawTieConnection(
+  context: ReturnType<InstanceType<typeof Renderer>["getContext"]>,
+  current: RenderedBassNote,
+  next: RenderedBassNote,
+) {
+  if (current.standardNote && next.standardNote) {
+    new StaveTie({
+      first_indices: [0],
+      first_note: current.standardNote,
+      last_indices: [0],
+      last_note: next.standardNote,
+    })
+      .setContext(context)
+      .draw();
+    return;
+  }
+
+  drawTabArc(context, current, next);
+}
+
+function drawSlurConnection(
+  context: ReturnType<InstanceType<typeof Renderer>["getContext"]>,
+  current: RenderedBassNote,
+  next: RenderedBassNote,
+  label?: "H" | "P",
+) {
+  if (current.standardNote && next.standardNote) {
+    new Curve(current.standardNote, next.standardNote, {
+      cps: [
+        { x: 0, y: 8 },
+        { x: 0, y: 8 },
+      ],
+      position: "nearHead",
+      position_end: "nearHead",
+      y_shift: 6,
+    })
+      .setContext(context)
+      .draw();
+
+    if (label) {
+      const midX = (noteCenterX(current.standardNote) + noteCenterX(next.standardNote)) / 2;
+      const labelY = Math.min(current.standardNote.getYs()[0], next.standardNote.getYs()[0]) - 18;
+      context.save();
+      context.setFont("Arial", 11);
+      context.setFillStyle("#111317");
+      context.fillText(label, midX - 4, labelY);
+      context.restore();
+    }
+    return;
+  }
+
+  drawTabArc(context, current, next, label);
 }
 
 function drawSlideLine(
@@ -962,14 +992,37 @@ function drawSlideLine(
   current: RenderedBassNote,
   next: RenderedBassNote,
 ) {
-  const y1 = current.tabStave.getYForLine(current.note.string - 1);
-  const y2 = next.tabStave.getYForLine(next.note.string - 1);
+  const direction = resolveRenderedSlideDirection(current.note, next.note);
+  const startX = current.centerX + tabLabelHalfWidth(current.note) + 4;
+  const endX = Math.max(startX + 12, next.centerX - tabLabelHalfWidth(next.note) - 4);
+  const startY = tabLineY(current) + (direction === "up" ? 5 : -5);
+  const endY = tabLineY(next) + (direction === "up" ? -5 : 5);
   context.save();
   context.setStrokeStyle("#111317");
   context.setLineWidth(1.6);
   context.beginPath();
-  context.moveTo(current.centerX + 8, y1 - 4);
-  context.lineTo(next.centerX - 8, y2 + 4);
+  context.moveTo(startX, startY);
+  context.lineTo(endX, endY);
+  context.stroke();
+  context.restore();
+}
+
+function drawSlideOutTail(
+  context: ReturnType<InstanceType<typeof Renderer>["getContext"]>,
+  current: RenderedBassNote,
+  direction: "up" | "down",
+) {
+  const startX = current.centerX + tabLabelHalfWidth(current.note) + 4;
+  const startY = tabLineY(current) + (direction === "up" ? 4 : -4);
+  const endX = startX + 20;
+  const endY = startY + (direction === "up" ? -12 : 12);
+
+  context.save();
+  context.setStrokeStyle("#111317");
+  context.setLineWidth(1.6);
+  context.beginPath();
+  context.moveTo(startX, startY);
+  context.lineTo(endX, endY);
   context.stroke();
   context.restore();
 }
@@ -1004,12 +1057,48 @@ function noteCenterX(note: StaveNote): number {
   return (note.getTieLeftX() + note.getTieRightX()) / 2;
 }
 
+function tabLineY(renderedNote: RenderedBassNote): number {
+  return renderedNote.tabStave.getYForLine(renderedNote.note.string - 1);
+}
+
+function tabLabelHalfWidth(note: BassRenderNote): number {
+  const label = note.fret === "X" ? "X" : String(note.fret);
+  return Math.max(12, label.length * 9) / 2;
+}
+
+function resolveRenderedSlideDirection(
+  current: BassRenderNote,
+  next?: BassRenderNote | null,
+): "up" | "down" {
+  if (current.slideDirection) {
+    return current.slideDirection;
+  }
+
+  if (next) {
+    if (typeof current.fret === "number" && typeof next.fret === "number" && next.fret !== current.fret) {
+      return next.fret > current.fret ? "up" : "down";
+    }
+    if (current.actualMidi !== null && next.actualMidi !== null && next.actualMidi !== current.actualMidi) {
+      return next.actualMidi > current.actualMidi ? "up" : "down";
+    }
+    if (next.string !== current.string) {
+      return next.string < current.string ? "up" : "down";
+    }
+  }
+
+  if (current.slideOutDirection) {
+    return current.slideOutDirection;
+  }
+
+  return typeof current.fret === "number" && current.fret > 12 ? "down" : "up";
+}
+
 function lyricsHostStave(mode: BassRenderTrack["mode"], standardStave: Stave, tabStave: TabStave): Stave {
   return mode === "tab" ? tabStave : mode === "both" ? tabStave : standardStave;
 }
 
 function stemDirectionForKey(key: string): number {
-  return lineForKey(key) < 2 ? 1 : -1;
+  return lineForKey(key) < 0 ? 1 : -1;
 }
 
 function lineForKey(key: string): number {

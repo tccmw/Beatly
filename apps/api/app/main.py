@@ -15,7 +15,8 @@ from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadF
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
-from app.models import AnalysisJobStatus, AnalysisResult, LyricWord
+from app.models import AnalysisJobStatus, AnalysisResult, AnalysisTrack, LyricWord
+from app.services.bass_analysis import BASS_EXTRACTION_VERSION, analyze_bass_track
 from app.services.audio_preprocess import AudioPreprocessError, prepare_audio_for_analysis
 from app.services.drum_analysis import analyze_drum_track
 from app.services.drum_separation import DrumSeparationError, separate_stems_with_demucs
@@ -290,6 +291,7 @@ def _run_analysis(
         stems.drums,
         stems.vocals,
         settings.separated_dir / upload_path.stem / "prepared",
+        bass_audio=stems.bass,
         include_vocals=needs_whisper_timing,
     )
     logger.info("[%s] audio preprocessing finished in %.1fs", request_id, time.perf_counter() - step_started)
@@ -303,6 +305,17 @@ def _run_analysis(
         request_id,
         time.perf_counter() - step_started,
         len(drum_events),
+    )
+
+    step_started = time.perf_counter()
+    _report_progress(progress, "Extracting bass pitches.")
+    logger.info("[%s] bass analysis started", request_id)
+    bass_spec = analyze_bass_track(prepared_audio.bass, bpm)
+    logger.info(
+        "[%s] bass analysis finished in %.1fs with %d notes",
+        request_id,
+        time.perf_counter() - step_started,
+        len(bass_spec.notes),
     )
 
     if has_provided_lyrics and needs_whisper_alignment:
@@ -403,6 +416,32 @@ def _run_analysis(
         ticks_per_quarter=TICKS_PER_QUARTER,
         midi_ticks=midi_ticks,
         engraved_measures=engraved_measures,
+        bassSpec=bass_spec,
+        bass_spec=bass_spec,
+        BASS_SPEC=bass_spec,
+        tracks=[
+            AnalysisTrack(
+                id="drum",
+                label="Drum",
+                bpm=bpm,
+                instrumentType="DRUM",
+                instrument_type="DRUM",
+                words=words,
+                midi_ticks=midi_ticks,
+                engraved_measures=engraved_measures,
+            ),
+            AnalysisTrack(
+                id="bass",
+                label="Bass",
+                bpm=bpm,
+                instrumentType="BASS",
+                instrument_type="BASS",
+                bassSpec=bass_spec,
+                bass_spec=bass_spec,
+                BASS_SPEC=bass_spec,
+                words=words,
+            ),
+        ],
     )
     _store_cached_analysis(settings.analysis_cache_dir, cache_key, result)
     return result
@@ -492,6 +531,7 @@ def _analysis_cache_key(
     payload = {
         "alignment_mode": alignment_mode,
         "audio_sha256": upload_hash,
+        "bass_extraction_version": BASS_EXTRACTION_VERSION,
         "demucs_device": getattr(settings, "demucs_device", None),
         "demucs_mode": demucs_mode,
         "demucs_model": getattr(settings, "demucs_model", None),

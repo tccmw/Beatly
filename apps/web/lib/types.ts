@@ -147,6 +147,9 @@ export type BassSpecNote = {
   tie_from_previous?: boolean;
   slur_to_next?: boolean;
   slur_from_previous?: boolean;
+  slide_direction?: "up" | "down" | null;
+  slide_out_direction?: "up" | "down" | null;
+  slide_out_to_nowhere?: boolean;
   prefer_string?: 1 | 2 | 3 | 4;
   slap_style?: boolean;
   is_pop?: boolean;

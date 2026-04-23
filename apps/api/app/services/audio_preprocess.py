@@ -13,12 +13,14 @@ class AudioPreprocessError(RuntimeError):
 class PreparedAudio:
     drums: Path
     vocals: Path
+    bass: Path | None = None
 
 
 def prepare_audio_for_analysis(
     drums_audio: Path,
     vocals_audio: Path,
     output_dir: Path,
+    bass_audio: Path | None = None,
     include_vocals: bool = True,
 ) -> PreparedAudio:
     """Create lightweight mono WAV files for analysis and transcription.
@@ -30,12 +32,15 @@ def prepare_audio_for_analysis(
     output_dir.mkdir(parents=True, exist_ok=True)
     drums_wav = output_dir / "drums-analysis-11025.wav"
     vocals_wav = output_dir / "vocals-whisper-16000.wav"
+    bass_wav = output_dir / "bass-analysis-22050.wav" if bass_audio else None
     _convert_to_mono_wav(drums_audio, drums_wav, sample_rate=11025)
     if include_vocals:
         _convert_to_mono_wav(vocals_audio, vocals_wav, sample_rate=16000)
     else:
         vocals_wav = vocals_audio
-    return PreparedAudio(drums=drums_wav, vocals=vocals_wav)
+    if bass_audio and bass_wav is not None:
+        _convert_to_mono_wav(bass_audio, bass_wav, sample_rate=22050)
+    return PreparedAudio(drums=drums_wav, vocals=vocals_wav, bass=bass_wav)
 
 
 def _convert_to_mono_wav(input_audio: Path, output_audio: Path, sample_rate: int) -> None:
