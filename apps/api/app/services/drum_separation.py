@@ -14,6 +14,7 @@ class DrumSeparationError(RuntimeError):
 class StemPaths:
     drums: Path
     vocals: Path
+    bass: Path | None = None
 
 
 def separate_stems_with_demucs(
@@ -31,9 +32,11 @@ def separate_stems_with_demucs(
     if use_stub:
         drum_stub = output_dir / f"{input_audio.stem}.drums.wav"
         vocal_stub = output_dir / f"{input_audio.stem}.vocals.wav"
+        bass_stub = output_dir / f"{input_audio.stem}.bass.wav"
         shutil.copyfile(input_audio, drum_stub)
         shutil.copyfile(input_audio, vocal_stub)
-        return StemPaths(drums=drum_stub, vocals=vocal_stub)
+        shutil.copyfile(input_audio, bass_stub)
+        return StemPaths(drums=drum_stub, vocals=vocal_stub, bass=bass_stub)
 
     normalized_mode = mode.lower().strip()
     if normalized_mode in {"none", "off", "skip"}:
@@ -65,12 +68,15 @@ def separate_stems_with_demucs(
     stem_dir = output_dir / model_name / input_audio.stem
     drum_path = stem_dir / ("no_vocals.wav" if normalized_mode == "vocals" else "drums.wav")
     vocal_path = stem_dir / "vocals.wav"
+    bass_path = stem_dir / "bass.wav" if normalized_mode != "vocals" else None
     if not drum_path.exists():
         raise DrumSeparationError(f"Demucs completed, but analysis stem was not found at {drum_path}")
     if not vocal_path.exists():
         raise DrumSeparationError(f"Demucs completed, but vocal stem was not found at {vocal_path}")
+    if bass_path is not None and not bass_path.exists():
+        bass_path = None
 
-    return StemPaths(drums=drum_path, vocals=vocal_path)
+    return StemPaths(drums=drum_path, vocals=vocal_path, bass=bass_path)
 
 
 def separate_drums_with_demucs(input_audio: Path, output_dir: Path, use_stub: bool = False) -> Path:

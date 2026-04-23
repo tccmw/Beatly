@@ -7,6 +7,18 @@ export type DrumNote =
   | "crash"
   | "ride";
 
+export type InstrumentType = "DRUM" | "BASS" | "GUITAR" | "KEYBOARD";
+export type InstrumentNotation = "percussion" | "staff" | "grand";
+export type BassRenderMode = "standard" | "tab" | "both";
+export type BassDuration = "w" | "h" | "q" | "8" | "16";
+export type BassTechnique =
+  | "HAMMER_ON"
+  | "PULL_OFF"
+  | "SLIDE"
+  | "DEAD"
+  | "SLAP"
+  | "POP";
+
 export type ScoreEvent = {
   time: number;
   note: DrumNote;
@@ -81,6 +93,67 @@ export type AnalysisResult = {
   ticks_per_quarter: number;
   midi_ticks: MidiTickEvent[];
   engraved_measures: EngravedMeasure[];
+  instrumentType?: InstrumentType;
+  instrument_type?: InstrumentType;
+  bassSpec?: BassSpec;
+  bass_spec?: BassSpec;
+  BASS_SPEC?: BassSpec;
+  tracks?: AnalysisTrack[];
+};
+
+export type AnalysisTrack = {
+  id?: string;
+  label?: string;
+  name?: string;
+  bpm?: number;
+  notation?: InstrumentNotation;
+  instrumentType?: InstrumentType;
+  instrument_type?: InstrumentType;
+  bassSpec?: BassSpec;
+  bass_spec?: BassSpec;
+  BASS_SPEC?: BassSpec;
+  events?: ScoreEvent[];
+  words?: LyricWord[];
+  ticks_per_quarter?: number;
+  midi_ticks?: MidiTickEvent[];
+  engraved_measures?: EngravedMeasure[];
+};
+
+export type BassSpec = {
+  mode?: BassRenderMode;
+  notes: BassSpecNote[];
+};
+
+export type BassSpecNote = {
+  id?: string;
+  time?: number;
+  measure?: number;
+  slot?: number;
+  duration?: BassDuration;
+  duration_slots?: number;
+  midi_note?: number;
+  staff_key?: string | null;
+  string?: 1 | 2 | 3 | 4;
+  fret?: number | "X" | "x" | "0";
+  lyric?: string | null;
+  confidence?: number;
+  chord?: string | null;
+  harmony?: string | null;
+  technique?: string | null;
+  techniques?: string[];
+  is_dead?: boolean;
+  is_staccato?: boolean;
+  tie_to_next?: boolean;
+  tie_from_previous?: boolean;
+  slur_to_next?: boolean;
+  slur_from_previous?: boolean;
+  slide_direction?: "up" | "down" | null;
+  slide_out_direction?: "up" | "down" | null;
+  slide_out_to_nowhere?: boolean;
+  prefer_string?: 1 | 2 | 3 | 4;
+  slap_style?: boolean;
+  is_pop?: boolean;
+  is_pull_off?: boolean;
 };
 
 export type AnalysisJobStatus = {
