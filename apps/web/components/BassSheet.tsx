@@ -212,12 +212,16 @@ export const BassSheet = forwardRef<DrumSheetHandle, Props>(function BassSheet(
           if (track.mode !== "tab") {
             const notes = displayTicks.map((tick) => makeBassStandardNote(tick));
             const voice = new Voice({ num_beats: 4, beat_value: 4 }).setStrict(true);
+            const beams = Beam.generateBeams(notes, {
+              groups: Beam.getDefaultBeamGroups("4/4"),
+              maintain_stem_directions: true,
+            });
             voice.addTickables(notes);
 
             const formatterWidth = staveWidth - (isLineStart ? FIRST_MEASURE_RESERVE_PX : REGULAR_MEASURE_RESERVE_PX);
             new Formatter().joinVoices([voice]).format([voice], formatterWidth);
             voice.draw(context, standardStave);
-            Beam.generateBeams(notes).forEach((beam) => beam.setContext(context).draw());
+            beams.forEach((beam) => beam.setContext(context).draw());
 
             drawTabNumbers(context, displayTicks, notes, tabStave, track.mode);
             renderedNotes.push(...collectRenderedNotes(displayTicks, notes, tabStave, systemKey));
