@@ -1,6 +1,7 @@
 "use client";
 
 import { forwardRef, useImperativeHandle, useMemo, useRef } from "react";
+import { BassSheet } from "@/components/BassSheet";
 import { DrumSheet, type DrumSheetHandle, type PrintableScoreSystem } from "@/components/DrumSheet";
 import { MelodicSheet } from "@/components/MelodicSheet";
 import { resolveInstrumentView } from "@/lib/scoreTracks";
@@ -47,6 +48,21 @@ export const ScoreSheet = forwardRef<ScoreSheetHandle, Props>(function ScoreShee
         ref={innerRef}
         score={view.score}
         showLyrics={showLyrics}
+      />
+    );
+  }
+
+  if (view.instrumentType === "BASS") {
+    return (
+      <BassSheet
+        audioCurrentTime={audioCurrentTime}
+        followPlayback={followPlayback}
+        isPlaying={isPlaying}
+        onFollowPlaybackChange={onFollowPlaybackChange}
+        onSeek={onSeek}
+        ref={innerRef}
+        showLyrics={showLyrics}
+        track={view.track}
       />
     );
   }
