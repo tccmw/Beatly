@@ -1,25 +1,28 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { DrumSheet, type DrumSheetHandle, type PrintableScoreSystem } from "@/components/DrumSheet";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ScoreSheet, type ScoreSheetHandle } from "@/components/ScoreSheet";
+import type { PrintableScoreSystem } from "@/components/DrumSheet";
 import {
   SynchronizedScorePlayer,
   type PlaybackSource,
   type SynchronizedScorePlayerHandle,
 } from "@/components/SynchronizedScorePlayer";
 import { analyzeAudio, analyzeYouTube } from "@/lib/api";
-import type { AnalysisJobStatus, AnalysisResult } from "@/lib/types";
+import { INSTRUMENT_OPTIONS, instrumentLabel, resolveInstrumentView, resolvedViewMeasureCount, resolvedViewNoteCount } from "@/lib/scoreTracks";
+import type { AnalysisJobStatus, AnalysisResult, InstrumentType } from "@/lib/types";
 
 type SourceType = "upload" | "youtube";
 
 export default function Home() {
   const audioObjectUrlRef = useRef<string | null>(null);
   const playerRef = useRef<SynchronizedScorePlayerHandle | null>(null);
-  const sheetRef = useRef<DrumSheetHandle | null>(null);
+  const sheetRef = useRef<ScoreSheetHandle | null>(null);
   const [sourceType, setSourceType] = useState<SourceType>("upload");
   const [file, setFile] = useState<File | null>(null);
   const [youtubeUrl, setYoutubeUrl] = useState("");
   const [score, setScore] = useState<AnalysisResult | null>(null);
+  const [selectedInstrument, setSelectedInstrument] = useState<InstrumentType>("DRUM");
   const [playbackSource, setPlaybackSource] = useState<PlaybackSource | null>(null);
   const [audioCurrentTime, setAudioCurrentTime] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
@@ -30,6 +33,10 @@ export default function Home() {
   const [showLyrics, setShowLyrics] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [statusText, setStatusText] = useState<string | null>(null);
+  const resolvedInstrumentView = useMemo(
+    () => (score ? resolveInstrumentView(score, selectedInstrument) : null),
+    [score, selectedInstrument],
+  );
 
   useEffect(() => {
     return () => {
@@ -190,10 +197,26 @@ export default function Home() {
       <div className="shell">
         <div className="topbar">
           <div>
-            <h1 className="title">Beatly Drum Sheet</h1>
+            <h1 className="title">Beatly Multi-Instrument Score</h1>
             <p className="subtitle">
-              Upload audio or paste a YouTube link to generate a synchronized drum score.
+              Upload audio or paste a YouTube link to generate a synchronized score and switch between drum, bass, guitar,
+              and keyboard views.
             </p>
+          </div>
+          <div className="instrument-selector" aria-label="Instrument selector">
+            {INSTRUMENT_OPTIONS.map((option) => (
+              <button
+                className={selectedInstrument === option.instrument ? "instrument-button active" : "instrument-button"}
+                key={option.instrument}
+                onClick={() => setSelectedInstrument(option.instrument)}
+                type="button"
+              >
+                <span aria-hidden="true" className="instrument-icon">
+                  {option.icon}
+                </span>
+                <span>{option.label}</span>
+              </button>
+            ))}
           </div>
         </div>
 
@@ -273,9 +296,20 @@ export default function Home() {
           <>
             <div className="meta">
               <span className="pill">BPM {Math.round(score.bpm)}</span>
-              <span className="pill">Drum events {score.events.length}</span>
+              <span className="pill">Track {resolvedInstrumentView?.label ?? instrumentLabel(selectedInstrument)}</span>
+              <span className="pill">Measures {resolvedInstrumentView ? resolvedViewMeasureCount(resolvedInstrumentView) : 0}</span>
+              <span className="pill">Notes {resolvedInstrumentView ? resolvedViewNoteCount(resolvedInstrumentView) : 0}</span>
               <span className="pill">Words {score.words.length}</span>
+              {resolvedInstrumentView && resolvedInstrumentView.source === "derived" ? (
+                <span className="pill">Derived Preview</span>
+              ) : null}
             </div>
+            {resolvedInstrumentView && resolvedInstrumentView.source === "derived" ? (
+              <div className="track-status">
+                {resolvedInstrumentView.label} is currently rendered from the drum timing map because the API response does not
+                include an explicit {resolvedInstrumentView.label.toLowerCase()} track yet.
+              </div>
+            ) : null}
             {playbackSource ? (
               <SynchronizedScorePlayer
                 ref={playerRef}
@@ -288,12 +322,14 @@ export default function Home() {
                 source={playbackSource}
               />
             ) : null}
-            <DrumSheet
+            <ScoreSheet
               audioCurrentTime={audioCurrentTime}
               followPlayback={followPlayback}
+              instrument={selectedInstrument}
               isPlaying={isPlaybackActive}
               onSeek={handleScoreSeek}
               onFollowPlaybackChange={setFollowPlayback}
+              key={`score-${selectedInstrument}`}
               ref={sheetRef}
               score={score}
               showLyrics={showLyrics}

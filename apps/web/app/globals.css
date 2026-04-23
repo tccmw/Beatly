@@ -46,6 +46,37 @@ input {
   margin-bottom: 24px;
 }
 
+.instrument-selector {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.instrument-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--ink);
+  background: #fff;
+  cursor: pointer;
+}
+
+.instrument-button.active {
+  border-color: var(--accent);
+  color: #fff;
+  background: var(--accent);
+}
+
+.instrument-icon {
+  font-size: 16px;
+  line-height: 1;
+}
+
 .title {
   margin: 0 0 8px;
   font-size: 34px;
@@ -150,6 +181,12 @@ input {
 
 .status {
   color: var(--accent-strong);
+}
+
+.track-status {
+  margin: -2px 0 6px;
+  color: var(--muted);
+  line-height: 1.5;
 }
 
 .meta {
@@ -459,13 +496,19 @@ input {
     display: block;
   }
 
+  .instrument-selector {
+    justify-content: flex-start;
+    margin-top: 16px;
+  }
+
   .title {
     font-size: 28px;
   }
 
   .file-input,
   .text-input,
-  .button {
+  .button,
+  .instrument-button {
     width: 100%;
   }
 
