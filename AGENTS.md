@@ -2,6 +2,7 @@
 
 이 파일은 Beatly에서 작업하는 AI 에이전트가 매 작업 전에 따라야 하는 핵심 규약이다.
 악보, 가사, 오디오 분석, 렌더링, API 응답 구조를 변경하기 전에는 반드시 `harness/PROJECT_HARNESS.md`도 확인한다.
+기타 악보/타브 추출 또는 렌더링을 변경할 때는 `harness/GUITAR_HARNESS.md`도 함께 확인한다.
 
 ## Ultimate Goal
 

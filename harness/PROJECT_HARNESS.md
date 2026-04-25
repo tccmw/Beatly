@@ -1,6 +1,7 @@
 # Beatly Project Harness
 
 이 하네스는 Beatly의 품질 기준을 코드 변경 시마다 비교할 수 있는 프로젝트 계약이다.
+드럼 외 악기별 확장 계약은 별도 하네스를 따른다. 기타 계약은 `harness/GUITAR_HARNESS.md`에 둔다.
 최종 산출물은 "MP3 업로드 -> 드러머가 바로 읽고 연주할 수 있는 드럼 악보 + 시간 동기화 가사"여야 한다.
 
 ## Ultimate Goal

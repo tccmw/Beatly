@@ -77,6 +77,12 @@ The project contract lives in `harness/PROJECT_HARNESS.md`. It captures the
 ultimate goal, notation rules, hard constraints, and technical pipeline for
 producing drummer-ready sheets with synchronized lyrics.
 
+Guitar-specific extraction and tablature rules live in
+`harness/GUITAR_HARNESS.md`. That contract defines the future explicit guitar
+track format, standard staff + TAB alignment rules, tuning requirements,
+position-selection rules, and technique gates for hammer-ons, pull-offs,
+slides, bends, vibrato, dead notes, and palm muting.
+
 Run the executable quality harness from the repository root:
 
 ```powershell
